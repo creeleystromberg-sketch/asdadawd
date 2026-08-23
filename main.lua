@@ -1,5 +1,5 @@
 -- Sol's RNG Material Scanner & Navigator
--- Version: v0.8.1 | Fixed Jump Physics & Strict Biome Mappings
+-- Version: v0.8.5 | Fixed Item Identification & Grounded Jump Physics
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -12,8 +12,8 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local GUI_NAME = "SolsMaterialScanner"
-local VERSION = "v0.8.1"
-local BUILD = "BUILD-015"
+local VERSION = "v0.8.5"
+local BUILD = "BUILD-016"
 
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then
@@ -55,63 +55,73 @@ local KEYWORDS = {
 }
 
 -- =========================================================
--- MATERIAL & BIOME MAPPINGS
+-- ITEM IDENTIFICATION & BIOME MAPPING
 -- =========================================================
-
-local MATERIAL_INFO = {
-	["Wind Essence"] = "Windy",
-	["Icicle"] = "Snowy",
-	["Rainy Bottle"] = "Rainy",
-	["Hour Glass"] = "Sandstorm",
-	["Eternal Flame"] = "Hell",
-	["Piece of Star"] = "Starfall",
-	["Feather Vial"] = "Heaven",
-	["Curruptaine"] = "Corruption",
-	["NULL?"] = "Null",
-}
 
 local function lowered(value)
 	return string.lower(tostring(value or ""))
 end
 
-local function getMaterialBiome(rawName)
-	if not rawName or rawName == "" then
-		return "Unknown", "Material"
+local function containsExcludedText(value)
+	local text = lowered(value)
+	return string.find(text, "clover", 1, true) ~= nil
+		or string.find(text, "four leaf", 1, true) ~= nil
+		or string.find(text, "four-leaf", 1, true) ~= nil
+		or string.find(text, "luck buff", 1, true) ~= nil
+end
+
+local function identifyMaterial(model, prompt)
+	if not model and not prompt then
+		return nil, nil
 	end
 
-	if MATERIAL_INFO[rawName] then
-		return MATERIAL_INFO[rawName], rawName
+	local texts = {}
+
+	if prompt then
+		if prompt.ObjectText and prompt.ObjectText ~= "" then table.insert(texts, prompt.ObjectText) end
+		if prompt.ActionText and prompt.ActionText ~= "" then table.insert(texts, prompt.ActionText) end
 	end
 
-	local low = lowered(rawName)
-
-	if string.find(low, "null", 1, true) or string.find(low, "void", 1, true) then
-		return "Null", "NULL?"
-	elseif string.find(low, "wind", 1, true) then
-		return "Windy", "Wind Essence"
-	elseif string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
-		return "Rainy", "Rainy Bottle"
-	elseif string.find(low, "sand", 1, true) or string.find(low, "hour", 1, true) then
-		return "Sandstorm", "Hour Glass"
-	elseif string.find(low, "flame", 1, true) or string.find(low, "hell", 1, true) or string.find(low, "fire", 1, true) or string.find(low, "eternal", 1, true) then
-		return "Hell", "Eternal Flame"
-	elseif string.find(low, "star", 1, true) then
-		return "Starfall", "Piece of Star"
-	elseif string.find(low, "feather", 1, true) or string.find(low, "heaven", 1, true) or string.find(low, "vial", 1, true) then
-		return "Heaven", "Feather Vial"
-	elseif string.find(low, "corrupt", 1, true) then
-		return "Corruption", "Curruptaine"
-	elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) then
-		return "Snowy", "Icicle"
-	end
-
-	for name, biome in pairs(MATERIAL_INFO) do
-		if lowered(name) == low then
-			return biome, name
+	if model then
+		table.insert(texts, model.Name)
+		for _, descendant in ipairs(model:GetDescendants()) do
+			if descendant:IsA("BasePart") or descendant:IsA("Model") or descendant:IsA("Folder") then
+				table.insert(texts, descendant.Name)
+			elseif descendant:IsA("ProximityPrompt") then
+				if descendant.ObjectText and descendant.ObjectText ~= "" then table.insert(texts, descendant.ObjectText) end
+				if descendant.ActionText and descendant.ActionText ~= "" then table.insert(texts, descendant.ActionText) end
+			end
 		end
 	end
 
-	return "Special / Other", rawName
+	local combined = lowered(table.concat(texts, " "))
+
+	if containsExcludedText(combined) then
+		return nil, nil
+	end
+
+	-- Strict matching for the 9 Sol's RNG items
+	if string.find(combined, "eternal", 1, true) or string.find(combined, "flame", 1, true) or string.find(combined, "hell", 1, true) or string.find(combined, "fire", 1, true) then
+		return "Eternal Flame", "Hell"
+	elseif string.find(combined, "star", 1, true) or string.find(combined, "meteor", 1, true) or string.find(combined, "comet", 1, true) then
+		return "Piece of Star", "Starfall"
+	elseif string.find(combined, "feather", 1, true) or string.find(combined, "vial", 1, true) or string.find(combined, "heaven", 1, true) then
+		return "Feather Vial", "Heaven"
+	elseif string.find(combined, "currupt", 1, true) or string.find(combined, "corrupt", 1, true) then
+		return "Curruptaine", "Corruption"
+	elseif string.find(combined, "null", 1, true) or string.find(combined, "void", 1, true) then
+		return "NULL?", "Null"
+	elseif string.find(combined, "wind", 1, true) or string.find(combined, "essence", 1, true) then
+		return "Wind Essence", "Windy"
+	elseif string.find(combined, "icicle", 1, true) or string.find(combined, "snow", 1, true) or string.find(combined, "ice", 1, true) then
+		return "Icicle", "Snowy"
+	elseif string.find(combined, "hour", 1, true) or string.find(combined, "sand", 1, true) then
+		return "Hour Glass", "Sandstorm"
+	elseif string.find(combined, "rain", 1, true) or string.find(combined, "bottle", 1, true) then
+		return "Rainy Bottle", "Rainy"
+	end
+
+	return nil, nil
 end
 
 local selectedMaterialModel = nil
@@ -119,7 +129,7 @@ local selectedMaterialName = nil
 local materialRows = {}
 
 -- =========================================================
--- UI HELPERS
+-- UI BUILDER
 -- =========================================================
 
 local function uiCorner(parent, radius)
@@ -284,7 +294,7 @@ local function pageTitle(page, text, subtitle)
 	s.Parent = page
 end
 
-pageTitle(materialsPage, "Materials", "Only materials currently detected by the tracker appear here.")
+pageTitle(materialsPage, "Materials", "Active Sol's RNG materials currently spawned on the server.")
 
 local materialList = Instance.new("ScrollingFrame")
 materialList.Size = UDim2.new(1, 0, 1, -72)
@@ -312,13 +322,13 @@ materialLayout.Parent = materialList
 local emptyMaterials = Instance.new("TextLabel")
 emptyMaterials.Size = UDim2.new(1, -10, 0, 42)
 emptyMaterials.BackgroundTransparency = 1
-emptyMaterials.Text = "No materials detected"
+emptyMaterials.Text = "No materials detected on map"
 emptyMaterials.TextColor3 = Color3.fromRGB(112, 117, 128)
 emptyMaterials.TextSize = 12
 emptyMaterials.Font = Enum.Font.Gotham
 emptyMaterials.Parent = materialList
 
-pageTitle(trackerPage, "Tracker & AI", "Visual beams and natural pathfinding navigation.")
+pageTitle(trackerPage, "Tracker & AI", "Visual markers and grounded pathfinding.")
 
 local trackButton = Instance.new("TextButton")
 trackButton.Size = UDim2.fromOffset(170, 36)
@@ -363,7 +373,7 @@ navigationStatus.Position = UDim2.fromOffset(0, 205)
 navigationStatus.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
 navigationStatus.BackgroundTransparency = 0.2
 navigationStatus.BorderSizePixel = 0
-navigationStatus.Text = "AI: idle\nPress GO next to a detected material."
+navigationStatus.Text = "AI: idle\nClick GO next to an item in Materials tab."
 navigationStatus.TextColor3 = Color3.fromRGB(181, 185, 194)
 navigationStatus.TextSize = 11
 navigationStatus.Font = Enum.Font.Gotham
@@ -385,11 +395,11 @@ stopNavigationButton.MouseButton1Click:Connect(function()
 	if stopNavigation then
 		stopNavigation("Stopped by user.")
 	else
-		navigationStatus.Text = "AI: not initialized yet."
+		navigationStatus.Text = "AI: not initialized."
 	end
 end)
 
-pageTitle(playerPage, "Player", "Local movement and speed adjustments.")
+pageTitle(playerPage, "Player", "Local player adjustments.")
 
 local speedCard = Instance.new("Frame")
 speedCard.Size = UDim2.new(1, 0, 0, 82)
@@ -449,14 +459,14 @@ local speedHint = Instance.new("TextLabel")
 speedHint.Size = UDim2.new(1, -180, 0, 20)
 speedHint.Position = UDim2.fromOffset(12, 39)
 speedHint.BackgroundTransparency = 1
-speedHint.Text = "Changes by exactly 1"
+speedHint.Text = "Fine-tune speed"
 speedHint.TextColor3 = Color3.fromRGB(114, 119, 130)
 speedHint.TextSize = 10
 speedHint.Font = Enum.Font.Gotham
 speedHint.TextXAlignment = Enum.TextXAlignment.Left
 speedHint.Parent = speedCard
 
-pageTitle(serverPage, "Private Server", "Paste a private server link or a server instance id.")
+pageTitle(serverPage, "Private Server", "Teleport directly via Join Guard, link, or JobId.")
 
 local serverInput = Instance.new("TextBox")
 serverInput.Size = UDim2.new(1, 0, 0, 38)
@@ -490,7 +500,7 @@ local serverStatus = Instance.new("TextLabel")
 serverStatus.Size = UDim2.new(1, -112, 0, 52)
 serverStatus.Position = UDim2.fromOffset(112, 120)
 serverStatus.BackgroundTransparency = 1
-serverStatus.Text = "Waiting for a link."
+serverStatus.Text = "Waiting for link."
 serverStatus.TextColor3 = Color3.fromRGB(125, 130, 141)
 serverStatus.TextSize = 11
 serverStatus.Font = Enum.Font.Gotham
@@ -499,7 +509,7 @@ serverStatus.TextXAlignment = Enum.TextXAlignment.Left
 serverStatus.TextYAlignment = Enum.TextYAlignment.Center
 serverStatus.Parent = serverPage
 
-pageTitle(diagnosticPage, "Diagnostic", "Keep the existing scanner available while we build the navigation system.")
+pageTitle(diagnosticPage, "Diagnostic", "Workspace scanner for prompts and parts.")
 
 local buttonRow = Instance.new("Frame")
 buttonRow.Size = UDim2.new(1, 0, 0, 34)
@@ -769,18 +779,9 @@ end
 local function refreshMaterialsUI(entries)
 	clearMaterialRows()
 
-	local materialEntries = {}
-	for _, entry in ipairs(entries or {}) do
-		local biome, cleanName = getMaterialBiome(entry.name)
-		entry.name = cleanName
-		table.insert(materialEntries, { entry = entry, biome = biome })
-	end
+	emptyMaterials.Visible = #entries == 0
 
-	emptyMaterials.Visible = #materialEntries == 0
-
-	for index, data in ipairs(materialEntries) do
-		local entry = data.entry
-
+	for index, entry in ipairs(entries) do
 		local row = Instance.new("Frame")
 		row.Name = "Material_" .. index
 		row.Size = UDim2.new(1, -4, 0, 58)
@@ -806,7 +807,7 @@ local function refreshMaterialsUI(entries)
 		details.Size = UDim2.new(1, -155, 0, 18)
 		details.Position = UDim2.fromOffset(10, 31)
 		details.BackgroundTransparency = 1
-		details.Text = data.biome .. "  •  " .. tostring(math.floor(entry.distance + 0.5)) .. " studs"
+		details.Text = entry.biome .. "  •  " .. tostring(math.floor(entry.distance + 0.5)) .. " studs"
 		details.TextColor3 = Color3.fromRGB(124, 129, 140)
 		details.TextSize = 10
 		details.Font = Enum.Font.Gotham
@@ -845,10 +846,10 @@ local function refreshMaterialsUI(entries)
 end
 
 -- =========================================================
--- ITEM DETECTION LOGIC
+-- SCANNER & OBJECT SEARCH
 -- =========================================================
 
-local trackerBlacklistNames = {
+local trackerBlacklist = {
 	["fishshop"] = true, ["miscs"] = true, ["casecover"] = true,
 	["startflip"] = true, ["rig"] = true, ["r6"] = true,
 	["bankposition"] = true, ["summereventturrets"] = true,
@@ -862,140 +863,12 @@ local function trackerRoot()
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function containsExcludedText(value)
-	local text = lowered(value)
-	return string.find(text, "clover", 1, true) ~= nil
-		or string.find(text, "four leaf", 1, true) ~= nil
-		or string.find(text, "four-leaf", 1, true) ~= nil
-		or string.find(text, "luck buff", 1, true) ~= nil
-end
-
-local function modelContainsExcludedText(model)
-	if not model then return true end
-	if containsExcludedText(model.Name) then return true end
-
-	for _, descendant in ipairs(model:GetDescendants()) do
-		if containsExcludedText(descendant.Name) then return true end
-		if descendant:IsA("ProximityPrompt") then
-			if containsExcludedText(descendant.ActionText) or containsExcludedText(descendant.ObjectText) then
-				return true
-			end
-		end
-	end
-	return false
-end
-
-local function findPickupModelFromPrompt(prompt)
-	if not prompt or not prompt.Parent then return nil end
-
-	local current = prompt.Parent
-	local map = Workspace:FindFirstChild("Map")
-
-	while current and current ~= Workspace do
-		if current:IsA("Model") then
-			if map and current.Parent == map then return current end
-			if current.Parent and lowered(current.Parent.Name) == "spawneditems" then return current end
-		end
-		current = current.Parent
-	end
-	return nil
-end
-
-local function promptLooksLikePickup(prompt)
-	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
-		return false
-	end
-
-	local action = lowered(prompt.ActionText)
-	local objectText = lowered(prompt.ObjectText)
-
-	if containsExcludedText(action) or containsExcludedText(objectText) then
-		return false
-	end
-
-	if action == "pick up" or action == "pickup" or action == "collect" or action == "take" then
-		return true
-	end
-
-	local parent = prompt.Parent
-	local gp = parent and parent.Parent and lowered(parent.Parent.Name) or ""
-
-	if trackerBlacklistNames[gp] then return false end
-	if gp == "map" or gp == "spawneditems" then return true end
-
-	return findPickupModelFromPrompt(prompt) ~= nil
-end
-
 local function targetPartForModel(model, prompt)
 	if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
 		return prompt.Parent
 	end
 
-	local bottle = model:FindFirstChild("Bottle", true)
-	if bottle and bottle:IsA("BasePart") then return bottle end
-
-	local windB = model:FindFirstChild("windb", true)
-	if windB and windB:IsA("BasePart") then return windB end
-
-	local windC = model:FindFirstChild("windc", true)
-	if windC and windC:IsA("BasePart") then return windC end
-
-	local hitox = model:FindFirstChild("Hitox", true)
-	if hitox and hitox:IsA("BasePart") then return hitox end
-
-	local nullPart = model:FindFirstChild("Null", true) or model:FindFirstChild("NULL", true) or model:FindFirstChild("NULL?", true)
-	if nullPart and nullPart:IsA("BasePart") then return nullPart end
-
 	return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-end
-
-local function detectedItemName(model, prompt)
-	local objectText = prompt and tostring(prompt.ObjectText or "") or ""
-	local actionText = prompt and tostring(prompt.ActionText or "") or ""
-
-	if objectText ~= "" and lowered(objectText) ~= "item" and lowered(objectText) ~= "object" and not containsExcludedText(objectText) then
-		local _, standardName = getMaterialBiome(objectText)
-		return standardName
-	end
-
-	local modelName = model and model.Name or ""
-	local lowerModelName = lowered(modelName)
-	if modelName ~= "" and lowerModelName ~= "model" and lowerModelName ~= "spawneditems" and lowerModelName ~= "workspace" and not containsExcludedText(modelName) then
-		local biome, standardName = getMaterialBiome(modelName)
-		if biome ~= "Special / Other" then return standardName end
-	end
-
-	if actionText ~= "" and lowered(actionText) ~= "pick up" and lowered(actionText) ~= "pickup" and lowered(actionText) ~= "interact" and not containsExcludedText(actionText) then
-		local _, standardName = getMaterialBiome(actionText)
-		return standardName
-	end
-
-	if model:FindFirstChild("Null", true) or model:FindFirstChild("NULL", true) or model:FindFirstChild("null", true)
-		or model:FindFirstChild("NULL?", true) or model:FindFirstChild("Null?", true) then
-		return "NULL?"
-	end
-
-	if model:FindFirstChild("windb", true) or model:FindFirstChild("windc", true) then
-		return "Wind Essence"
-	end
-
-	if model:FindFirstChild("Bottle", true) then
-		return "Rainy Bottle"
-	end
-
-	for _, descendant in ipairs(model:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			local n = tostring(descendant.Name)
-			local ln = lowered(n)
-			if n ~= "" and ln ~= "meshpart" and ln ~= "part" and ln ~= "hitox" and not containsExcludedText(n) then
-				local biome, standardName = getMaterialBiome(n)
-				if biome ~= "Special / Other" then return standardName end
-				return n
-			end
-		end
-	end
-
-	return "Material"
 end
 
 local function getAllPickupEntries()
@@ -1006,19 +879,26 @@ local function getAllPickupEntries()
 	if not root then return entries end
 
 	for _, descendant in ipairs(Workspace:GetDescendants()) do
-		if descendant:IsA("ProximityPrompt") and promptLooksLikePickup(descendant) then
-			local model = findPickupModelFromPrompt(descendant)
-			if model and not seen[model] and not modelContainsExcludedText(model) then
-				local part = targetPartForModel(model, descendant)
-				if part then
-					seen[model] = true
-					table.insert(entries, {
-						model = model,
-						prompt = descendant,
-						part = part,
-						name = detectedItemName(model, descendant),
-						distance = (root.Position - part.Position).Magnitude,
-					})
+		if descendant:IsA("ProximityPrompt") and descendant.Enabled then
+			local model = descendant:FindFirstAncestorOfClass("Model")
+			if model and not seen[model] then
+				local parentName = model.Parent and lowered(model.Parent.Name) or ""
+				if not trackerBlacklist[parentName] then
+					local standardName, biome = identifyMaterial(model, descendant)
+					if standardName and biome then
+						local part = targetPartForModel(model, descendant)
+						if part then
+							seen[model] = true
+							table.insert(entries, {
+								model = model,
+								prompt = descendant,
+								part = part,
+								name = standardName,
+								biome = biome,
+								distance = (root.Position - part.Position).Magnitude,
+							})
+						end
+					end
 				end
 			end
 		end
@@ -1029,15 +909,12 @@ local function getAllPickupEntries()
 end
 
 -- =========================================================
--- CLEAN NAVIGATION & GROUNDED JUMP LOGIC
+-- CLEAN PATHFINDING & NATURAL JUMP NAVIGATION
 -- =========================================================
 
 local NAV_MAX_REPATHS = 8
-local NAV_WAYPOINT_TIMEOUT = 3.5
-local NAV_STUCK_TIME = 1.0
-local NAV_REACH_DISTANCE = 3.8
-local JUMP_COOLDOWN = 0.8
 local lastJumpTime = 0
+local JUMP_COOLDOWN = 0.85
 
 local function setNavigationStatus(line1, line2, line3)
 	local lines = { line1 }
@@ -1059,8 +936,8 @@ local function navigationCharacter()
 	return character, humanoid, root
 end
 
--- Only jumps if on the ground and cooldown has elapsed
-local function tryGroundedJump(humanoid)
+-- Only requests a jump if on solid ground and cooldown has passed
+local function requestGroundedJump(humanoid)
 	if not humanoid or humanoid.Health <= 0 then return end
 	local now = os.clock()
 	if now - lastJumpTime < JUMP_COOLDOWN then return end
@@ -1070,11 +947,12 @@ local function tryGroundedJump(humanoid)
 	humanoid.Jump = true
 end
 
--- Raycast in front to detect obstacles without mid-air floating
-local function isObstacleAhead(root, targetPosition, character)
-	local origin = root.Position - Vector3.new(0, 1.2, 0)
-	local direction = (Vector3.new(targetPosition.X, origin.Y, targetPosition.Z) - origin).Unit * 2.8
+local function isObstacleInFront(root, targetPos, character)
+	local origin = root.Position - Vector3.new(0, 1.5, 0)
+	local flatDirection = Vector3.new(targetPos.X - origin.X, 0, targetPos.Z - origin.Z)
+	if flatDirection.Magnitude < 0.1 then return false end
 
+	local direction = flatDirection.Unit * 2.8
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { character }
@@ -1084,21 +962,9 @@ local function isObstacleAhead(root, targetPosition, character)
 	return result ~= nil
 end
 
-local function safeGroundAt(position, character)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = character and { character } or {}
-	params.IgnoreWater = false
-
-	local origin = position + Vector3.new(0, 5, 0)
-	local direction = Vector3.new(0, -25, 0)
-
-	return Workspace:Raycast(origin, direction, params) ~= nil
-end
-
 local function tryFirePrompt(prompt)
 	if not prompt or not prompt.Parent or not prompt.Enabled then
-		return false, "Pickup prompt disappeared."
+		return false, "Prompt unavailable."
 	end
 
 	if type(fireproximityprompt) == "function" then
@@ -1108,148 +974,124 @@ local function tryFirePrompt(prompt)
 		return ok, ok and nil or tostring(err)
 	end
 
-	return false, "Executor missing fireproximityprompt; press E."
+	return false, "Executor has no fireproximityprompt; press E."
 end
 
-local function waitForWaypoint(token, humanoid, root, destination, isJump)
+local function moveToWaypoint(token, humanoid, root, targetPos, requiresJump)
 	local started = os.clock()
-	local lastMovementTime = os.clock()
-	local lastPosition = root.Position
+	local lastPos = root.Position
+	local lastMoveTime = os.clock()
 
-	while os.clock() - started < NAV_WAYPOINT_TIMEOUT do
-		if token ~= navigationToken or not navigationRunning then
-			return false, "cancelled"
-		end
+	if requiresJump then
+		requestGroundedJump(humanoid)
+	end
 
-		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then
-			return false, "character unavailable"
-		end
+	humanoid:MoveTo(targetPos)
+
+	while os.clock() - started < 3.5 do
+		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
+		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then return false, "unavailable" end
 
 		local currentPos = root.Position
-		local distance = (currentPos - destination).Magnitude
-		local deltaY = destination.Y - currentPos.Y
+		local dist = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
 
-		if isJump or deltaY > 1.4 or isObstacleAhead(root, destination, player.Character) then
-			tryGroundedJump(humanoid)
-		end
-
-		if distance <= NAV_REACH_DISTANCE then
+		if dist <= 3.2 then
 			return true
 		end
 
-		local moved = (currentPos - lastPosition).Magnitude
-		if moved >= 0.7 then
-			lastPosition = currentPos
-			lastMovementTime = os.clock()
-		elseif os.clock() - lastMovementTime >= NAV_STUCK_TIME then
-			tryGroundedJump(humanoid)
-			lastMovementTime = os.clock()
+		if (targetPos.Y - currentPos.Y) > 1.5 or isObstacleInFront(root, targetPos, player.Character) then
+			requestGroundedJump(humanoid)
 		end
 
-		task.wait(0.06)
+		if (currentPos - lastPos).Magnitude >= 0.5 then
+			lastPos = currentPos
+			lastMoveTime = os.clock()
+		elseif os.clock() - lastMoveTime >= 0.9 then
+			requestGroundedJump(humanoid)
+			lastMoveTime = os.clock()
+		end
+
+		task.wait(0.05)
 	end
 
-	return false, "waypoint timeout"
+	return false, "timeout"
 end
 
-local function directApproachSmart(token, entry, humanoid, root)
-	if not entry.part or not entry.part.Parent then return false, "Target gone." end
-
+local function directApproach(token, entry, humanoid, root)
 	local started = os.clock()
-	while os.clock() - started < 10 do
-		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
-		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then return false, "dead" end
+	while os.clock() - started < 8 do
+		if token ~= navigationToken or not navigationRunning then return false end
+		if not entry.part or not entry.part.Parent then return false end
 
 		local targetPos = entry.part.Position
 		local dist = (root.Position - targetPos).Magnitude
 
-		if dist <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1) then
-			return true, "Reached target"
+		if dist <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1.0) then
+			return true
 		end
 
 		humanoid:MoveTo(targetPos)
 
-		if (targetPos.Y - root.Position.Y) > 1.4 or isObstacleAhead(root, targetPos, player.Character) then
-			tryGroundedJump(humanoid)
+		if (targetPos.Y - root.Position.Y) > 1.5 or isObstacleInFront(root, targetPos, player.Character) then
+			requestGroundedJump(humanoid)
 		end
 
 		task.wait(0.08)
 	end
 
-	return false, "Direct walk timed out."
+	return false
 end
 
-local function followComputedPath(token, entry, humanoid, root)
-	if not entry.part or not entry.part.Parent then
-		return false, "Target disappeared."
-	end
+local function followPath(token, entry, humanoid, root)
+	if not entry.part or not entry.part.Parent then return false, "Target gone" end
 
 	local path = PathfindingService:CreatePath({
 		AgentRadius = 2.0,
 		AgentHeight = 5.0,
 		AgentCanJump = true,
-		AgentCanClimb = true,
-		AgentJumpHeight = 7.0,
+		AgentJumpHeight = 7.5,
 		AgentMaxSlope = 50.0,
 		WaypointSpacing = 3.5,
 	})
 
-	local ok, computeError = pcall(function()
+	local ok, _ = pcall(function()
 		path:ComputeAsync(root.Position, entry.part.Position)
 	end)
 
 	if not ok or path.Status ~= Enum.PathStatus.Success then
-		return directApproachSmart(token, entry, humanoid, root)
+		return directApproach(token, entry, humanoid, root), "Direct walk"
 	end
 
 	local waypoints = path:GetWaypoints()
 	if #waypoints < 2 then
-		return directApproachSmart(token, entry, humanoid, root)
+		return directApproach(token, entry, humanoid, root), "Direct walk"
 	end
 
-	for index = 2, #waypoints do
-		if token ~= navigationToken or not navigationRunning then
-			return false, "cancelled"
-		end
+	for i = 2, #waypoints do
+		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
+		if not entry.model.Parent or not entry.part.Parent then return false, "Target gone" end
 
-		if not entry.model or not entry.model.Parent or not entry.part or not entry.part.Parent then
-			return false, "Target disappeared."
-		end
+		local wp = waypoints[i]
+		local requiresJump = (wp.Action == Enum.PathWaypointAction.Jump)
 
-		local waypoint = waypoints[index]
-		local isJumpAction = (waypoint.Action == Enum.PathWaypointAction.Jump)
-
-		if not isJumpAction and not safeGroundAt(waypoint.Position, player.Character) then
-			return false, "Recalculating over void"
-		end
-
-		local currentDistance = (root.Position - entry.part.Position).Magnitude
-		if currentDistance <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1.0) then
-			return true, "Reached pickup range."
+		local remainingDist = (root.Position - entry.part.Position).Magnitude
+		if remainingDist <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1.0) then
+			return true, "In range"
 		end
 
 		setNavigationStatus(
 			"AI: walking to " .. entry.name,
-			"Waypoint " .. tostring(index - 1) .. "/" .. tostring(#waypoints - 1),
-			tostring(math.floor(currentDistance + 0.5)) .. " studs remaining"
+			"Waypoint " .. tostring(i - 1) .. "/" .. tostring(#waypoints - 1),
+			tostring(math.floor(remainingDist + 0.5)) .. " studs remaining"
 		)
 
-		humanoid:MoveTo(waypoint.Position)
-
-		local reached, why = waitForWaypoint(
-			token,
-			humanoid,
-			root,
-			waypoint.Position,
-			isJumpAction
-		)
-
-		if not reached then
-			return false, why
+		local reached, why = moveToWaypoint(token, humanoid, root, wp.Position, requiresJump)
+		if not reached and why == "cancelled" then
+			return false, "cancelled"
 		end
 	end
 
-	return true, "Path completed."
+	return true, "Completed"
 end
 
 stopNavigation = function(reason)
@@ -1268,7 +1110,7 @@ end
 
 startNavigation = function(entry)
 	if not entry or not entry.model or not entry.model.Parent or not entry.part or not entry.part.Parent then
-		setNavigationStatus("AI: error", "Selected material no longer exists.")
+		setNavigationStatus("AI: error", "Material no longer exists.")
 		return
 	end
 
@@ -1279,12 +1121,12 @@ startNavigation = function(entry)
 	navigationTargetModel = entry.model
 	navigationTargetName = entry.name
 
-	setNavigationStatus("AI: route initiated", entry.name, tostring(math.floor(entry.distance + 0.5)) .. " studs away")
+	setNavigationStatus("AI: pathing", entry.name, tostring(math.floor(entry.distance + 0.5)) .. " studs away")
 
 	pcall(function()
 		StarterGui:SetCore("SendNotification", {
-			Title = "Navigation AI",
-			Text = "Navigating to " .. entry.name,
+			Title = "Navigation",
+			Text = "Heading to " .. entry.name .. " (" .. entry.biome .. ")",
 			Duration = 3
 		})
 	end)
@@ -1292,25 +1134,23 @@ startNavigation = function(entry)
 	task.spawn(function()
 		for attempt = 1, NAV_MAX_REPATHS do
 			if token ~= navigationToken or not navigationRunning then return end
-
 			if not entry.model.Parent or not entry.part.Parent then
-				stopNavigation("Material was collected or disappeared.")
+				stopNavigation("Material was collected.")
 				return
 			end
 
 			local _, humanoid, root = navigationCharacter()
 			if not humanoid or not root then
-				stopNavigation("Character is unavailable.")
+				stopNavigation("Character unavailable.")
 				return
 			end
 
-			local targetDistance = (root.Position - entry.part.Position).Magnitude
-			local activationDistance = entry.prompt and math.max(4.5, entry.prompt.MaxActivationDistance) or 8
+			local targetDist = (root.Position - entry.part.Position).Magnitude
+			local activationDist = entry.prompt and math.max(4.5, entry.prompt.MaxActivationDistance) or 8
 
-			if targetDistance <= activationDistance then
+			if targetDist <= activationDist then
 				setNavigationStatus("AI: arrived at " .. entry.name, "Collecting material...")
-				local fired, fireError = tryFirePrompt(entry.prompt)
-
+				local fired, err = tryFirePrompt(entry.prompt)
 				if fired then
 					task.wait(0.35)
 					if not entry.model.Parent then
@@ -1326,28 +1166,27 @@ startNavigation = function(entry)
 					end
 				else
 					navigationRunning = false
-					setNavigationStatus("AI: arrived", fireError or "Press E to collect.")
+					setNavigationStatus("AI: arrived", err or "Press E to collect.")
 					return
 				end
 			end
 
-			setNavigationStatus("AI: pathfinding", entry.name, "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
+			setNavigationStatus("AI: walking", entry.name, "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
 
-			local reached, reason = followComputedPath(token, entry, humanoid, root)
-
+			local reached, reason = followPath(token, entry, humanoid, root)
 			if token ~= navigationToken or not navigationRunning then return end
 
 			if reached then
 				task.wait(0.1)
 			else
-				setNavigationStatus("AI: recalculating", reason or "Path rerouted.", "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
+				setNavigationStatus("AI: rerouting", reason or "Path failed.", "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
 				task.wait(0.2)
 			end
 		end
 
 		if token == navigationToken and navigationRunning then
 			navigationRunning = false
-			setNavigationStatus("AI: stopped", "Could not safely reach target.")
+			setNavigationStatus("AI: stopped", "Could not reach target.")
 		end
 	end)
 end
@@ -1374,7 +1213,7 @@ local function clearTrackerVisuals()
 	for _, model in ipairs(models) do destroyTrackerVisual(model) end
 end
 
-local function createTrackerVisual(model, targetPart)
+local function createTrackerVisual(model, targetPart, name, biome)
 	local root = trackerRoot()
 	if not root or not model or not targetPart then return end
 
@@ -1392,22 +1231,15 @@ local function createTrackerVisual(model, targetPart)
 	beam.Name = "SolsTrackerBeam"
 	beam.Attachment0 = sourceAttachment
 	beam.Attachment1 = targetAttachment
-	beam.Width0 = 1.15
-	beam.Width1 = 0.78
+	beam.Width0 = 1.1
+	beam.Width1 = 0.7
 	beam.FaceCamera = true
 	beam.LightEmission = 1
-	beam.LightInfluence = 0
-	beam.Brightness = 3
+	beam.Brightness = 2.5
 	beam.Segments = 24
-	beam.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-		ColorSequenceKeypoint.new(0.55, Color3.fromRGB(225, 230, 238)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(190, 198, 210))
-	})
+	beam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
 	beam.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.08),
-		NumberSequenceKeypoint.new(0.1, 0.02),
-		NumberSequenceKeypoint.new(0.9, 0.02),
+		NumberSequenceKeypoint.new(0, 0.05),
 		NumberSequenceKeypoint.new(1, 0.15)
 	})
 	beam.Parent = root
@@ -1417,9 +1249,9 @@ local function createTrackerVisual(model, targetPart)
 	highlight.Adornee = model
 	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	highlight.FillColor = Color3.fromRGB(235, 238, 244)
-	highlight.FillTransparency = 0.9
+	highlight.FillTransparency = 0.88
 	highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-	highlight.OutlineTransparency = 0.18
+	highlight.OutlineTransparency = 0.2
 	highlight.Parent = gui
 
 	local billboard = Instance.new("BillboardGui")
@@ -1451,9 +1283,9 @@ local function createTrackerVisual(model, targetPart)
 	nameLabel.Position = UDim2.fromOffset(7, 4)
 	nameLabel.BackgroundTransparency = 1
 	nameLabel.TextColor3 = Color3.fromRGB(248, 249, 251)
-	nameLabel.TextStrokeTransparency = 1
-	nameLabel.TextSize = 14
+	nameLabel.TextSize = 13
 	nameLabel.Font = Enum.Font.GothamMedium
+	nameLabel.Text = name .. " (" .. biome .. ")"
 	nameLabel.TextWrapped = true
 	nameLabel.Parent = card
 
@@ -1463,7 +1295,6 @@ local function createTrackerVisual(model, targetPart)
 	distanceLabel.Position = UDim2.fromOffset(7, 28)
 	distanceLabel.BackgroundTransparency = 1
 	distanceLabel.TextColor3 = Color3.fromRGB(166, 172, 184)
-	distanceLabel.TextStrokeTransparency = 1
 	distanceLabel.TextSize = 11
 	distanceLabel.Font = Enum.Font.Gotham
 	distanceLabel.Parent = card
@@ -1492,12 +1323,12 @@ local function updateTracker()
 		active[entry.model] = true
 		local visual = trackerVisuals[entry.model]
 		if not visual or not visual.beam or not visual.beam.Parent or visual.targetPart ~= entry.part then
-			createTrackerVisual(entry.model, entry.part)
+			createTrackerVisual(entry.model, entry.part, entry.name, entry.biome)
 			visual = trackerVisuals[entry.model]
 		end
 
 		if visual then
-			if visual.nameLabel then visual.nameLabel.Text = entry.name end
+			if visual.nameLabel then visual.nameLabel.Text = entry.name .. " (" .. entry.biome .. ")" end
 			if visual.distanceLabel then
 				visual.distanceLabel.Text = tostring(math.floor(entry.distance + 0.5)) .. " studs"
 			end
@@ -1511,12 +1342,12 @@ local function updateTracker()
 	for _, model in ipairs(stale) do destroyTrackerVisual(model) end
 
 	if #entries == 0 then
-		trackerStatus.Text = "No pickup prompts found. Waiting for materials..."
+		trackerStatus.Text = "No items detected on the map."
 		return
 	end
 
 	trackerStatus.Text = "Tracked materials: " .. tostring(#entries)
-		.. "\nNearest: " .. entries[1].name
+		.. "\nNearest: " .. entries[1].name .. " (" .. entries[1].biome .. ")"
 		.. " — " .. tostring(math.floor(entries[1].distance + 0.5)) .. " studs"
 end
 
@@ -1524,7 +1355,7 @@ local function startTracker()
 	trackerEnabled = true
 	trackButton.Text = "TRACK ITEMS: ON"
 	trackButton.BackgroundColor3 = Color3.fromRGB(92, 68, 18)
-	trackerStatus.Text = "Scanning pickup prompts..."
+	trackerStatus.Text = "Scanning workspace..."
 
 	if trackerConnection then trackerConnection:Disconnect() end
 
@@ -1759,7 +1590,7 @@ print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD .. " Loaded.")
 pcall(function()
 	StarterGui:SetCore("SendNotification", {
 		Title = "Sols Scanner " .. VERSION,
-		Text = "Navigation & Item names ready.",
+		Text = "Ready. Strict Biomes & Grounded Jump Active.",
 		Duration = 4
 	})
 end)
