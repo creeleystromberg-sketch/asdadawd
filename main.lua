@@ -1,765 +1,2192 @@
--- Sol's RNG Master Hub (Safe Mobile Version)
+-- Sol's RNG Material Scanner
+-- Main menu + Diagnostic tools
+-- Diagnostic can:
+--   1. Manual scan Workspace
+--   2. Live-monitor newly created objects
+--   3. Copy all diagnostic results to clipboard
+--   4. Clear the diagnostic log
+--
+-- Tracker + navigation build: can pathfind to selected materials and trigger their pickup prompt.
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
 local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
 local PathfindingService = game:GetService("PathfindingService")
-local CoreGui = game:GetService("CoreGui")
 
-local LocalPlayer = Players.LocalPlayer
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
-local IsRunning = true
-local RenderConn = nil
-local CurrentNavThread = nil
-local IsNavigating = false
-local CurrentWalkSpeed = 16
+local GUI_NAME = "SolsMaterialScanner"
+local VERSION = "v0.7.2"
+local BUILD = "BUILD-013"
 
-local ActiveESP = {}
-local ActiveTracers = {}
-local LogHistory = {}
+local oldGui = playerGui:FindFirstChild(GUI_NAME)
+if oldGui then
+	oldGui:Destroy()
+end
 
--- База материалов
-local MaterialDatabase = {
-    ["flame"]   = {Name = "Eternal Flame", Color = Color3.fromRGB(255, 69, 0), Biome = "Hell"},
-    ["star"]    = {Name = "Piece of Star", Color = Color3.fromRGB(255, 215, 0), Biome = "Starfall"},
-    ["corrupt"] = {Name = "Curruptaine",   Color = Color3.fromRGB(148, 0, 211), Biome = "Corruption"},
-    ["icicle"]  = {Name = "Icicle",        Color = Color3.fromRGB(175, 238, 238), Biome = "Snowy"},
-    ["snow"]    = {Name = "Icicle",        Color = Color3.fromRGB(175, 238, 238), Biome = "Snowy"},
-    ["rain"]    = {Name = "Rainy Bottle",  Color = Color3.fromRGB(70, 130, 180), Biome = "Rainy"},
-    ["wind"]    = {Name = "Wind Essence",  Color = Color3.fromRGB(135, 206, 235), Biome = "Windy"},
-    ["hour"]    = {Name = "Hour Glass",    Color = Color3.fromRGB(238, 203, 139), Biome = "Sandstorm"},
-    ["sand"]    = {Name = "Hour Glass",    Color = Color3.fromRGB(238, 203, 139), Biome = "Sandstorm"},
-    ["feather"] = {Name = "Feather Vial",  Color = Color3.fromRGB(240, 248, 255), Biome = "Heaven"},
-    ["null"]    = {Name = "NULL?",         Color = Color3.fromRGB(160, 32, 240), Biome = "Null"},
-    ["glitch"]  = {Name = "Glitch Biome",  Color = Color3.fromRGB(0, 255, 128), Biome = "Glitch"}
+local gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+gui.Parent = playerGui
+
+-- =========================================================
+-- STATE
+-- =========================================================
+
+local diagnosticEntries = {}
+local diagnosticSeen = {}
+local liveMonitorEnabled = false
+local descendantConnection = nil
+
+local trackerEnabled = false
+local trackerConnection = nil
+local trackerVisuals = {}
+
+local navigationToken = 0
+local navigationRunning = false
+local navigationTargetModel = nil
+local navigationTargetName = nil
+
+-- Forward declarations because UI buttons are created before navigation code.
+local startNavigation = nil
+local stopNavigation = nil
+
+local KEYWORDS = {
+	"bottle",
+	"potion",
+	"flame",
+	"eternal",
+	"corrupt",
+	"corruption",
+	"material",
+	"collect",
+	"pickup",
+	"item",
+	"spawn",
+	"biome",
+	"token",
+	"star",
+	"rain",
+	"wind",
+	"hell",
+	"heaven",
+	"void",
+	"galaxy",
+	"comet",
+	"meteor",
+	"strange",
+	"null"
 }
 
--- Безопасная очистка старых окон
+-- =========================================================
+-- MAIN WINDOW / UI
+-- =========================================================
+
+local MATERIAL_INFO = {
+	["Wind Essence"] = "Windy",
+	["Icicle"] = "Snowy",
+	["Rainy Bottle"] = "Rainy",
+	["Hour Glass"] = "Sandstorm",
+	["Hourglass"] = "Sandstorm",
+	["Eternal Flame"] = "Hell",
+	["Piece of Star"] = "Starfall",
+	["Star Piece"] = "Starfall",
+	["Feather Vial"] = "Heaven",
+	["Curruptaine"] = "Corruption",
+	["Corruptaine"] = "Corruption",
+	["NULL?"] = "Null",
+	["Null"] = "Null",
+	["NULL"] = "Null",
+	["Null?"] = "Null",
+	["Null Item"] = "Null",
+}
+
+local function lowered(value)
+	return string.lower(tostring(value or ""))
+end
+
+local function getMaterialBiome(rawName)
+	if not rawName or rawName == "" then
+		return "Unknown", "Material"
+	end
+
+	if MATERIAL_INFO[rawName] then
+		return MATERIAL_INFO[rawName], rawName
+	end
+
+	local low = lowered(rawName)
+
+	for name, biome in pairs(MATERIAL_INFO) do
+		if lowered(name) == low then
+			return biome, name
+		end
+	end
+
+	if string.find(low, "null", 1, true) or string.find(low, "void", 1, true) then
+		return "Null", "NULL?"
+	elseif string.find(low, "wind", 1, true) then
+		return "Windy", "Wind Essence"
+	elseif string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
+		return "Rainy", "Rainy Bottle"
+	elseif string.find(low, "sand", 1, true) or string.find(low, "hour", 1, true) then
+		return "Sandstorm", "Hour Glass"
+	elseif string.find(low, "flame", 1, true) or string.find(low, "hell", 1, true) or string.find(low, "fire", 1, true) then
+		return "Hell", "Eternal Flame"
+	elseif string.find(low, "star", 1, true) then
+		return "Starfall", "Piece of Star"
+	elseif string.find(low, "feather", 1, true) or string.find(low, "heaven", 1, true) then
+		return "Heaven", "Feather Vial"
+	elseif string.find(low, "corrupt", 1, true) then
+		return "Corruption", "Curruptaine"
+	elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) then
+		return "Snowy", "Icicle"
+	end
+
+	return "Special / Other", rawName
+end
+
+local selectedMaterialModel = nil
+local selectedMaterialName = nil
+local materialRows = {}
+
+local function uiCorner(parent, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius or 7)
+	c.Parent = parent
+	return c
+end
+
+local function uiStroke(parent, transparency)
+	local s = Instance.new("UIStroke")
+	s.Color = Color3.fromRGB(72, 76, 86)
+	s.Thickness = 1
+	s.Transparency = transparency or 0.25
+	s.Parent = parent
+	return s
+end
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.fromOffset(690, 430)
+main.Position = UDim2.new(0.5, -345, 0.5, -215)
+main.BackgroundColor3 = Color3.fromRGB(14, 15, 18)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+uiCorner(main, 10)
+uiStroke(main, 0.18)
+
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, 44)
+header.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
+header.BorderSizePixel = 0
+header.Parent = main
+uiCorner(header, 10)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -120, 1, 0)
+title.Position = UDim2.fromOffset(14, 0)
+title.BackgroundTransparency = 1
+title.Text = "Sol's RNG Scanner"
+title.TextColor3 = Color3.fromRGB(244, 245, 247)
+title.TextSize = 16
+title.Font = Enum.Font.GothamMedium
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local versionLabel = Instance.new("TextLabel")
+versionLabel.Size = UDim2.fromOffset(150, 18)
+versionLabel.Position = UDim2.fromOffset(145, 13)
+versionLabel.BackgroundTransparency = 1
+versionLabel.Text = VERSION .. "  •  " .. BUILD
+versionLabel.TextColor3 = Color3.fromRGB(124, 129, 140)
+versionLabel.TextSize = 10
+versionLabel.Font = Enum.Font.Gotham
+versionLabel.TextXAlignment = Enum.TextXAlignment.Left
+versionLabel.Parent = header
+
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Size = UDim2.fromOffset(30, 28)
+minimizeButton.Position = UDim2.new(1, -70, 0, 8)
+minimizeButton.BackgroundColor3 = Color3.fromRGB(31, 33, 39)
+minimizeButton.BorderSizePixel = 0
+minimizeButton.Text = "–"
+minimizeButton.TextColor3 = Color3.fromRGB(220, 222, 226)
+minimizeButton.TextSize = 17
+minimizeButton.Font = Enum.Font.GothamMedium
+minimizeButton.Parent = header
+uiCorner(minimizeButton, 6)
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.fromOffset(30, 28)
+closeButton.Position = UDim2.new(1, -36, 0, 8)
+closeButton.BackgroundColor3 = Color3.fromRGB(31, 33, 39)
+closeButton.BorderSizePixel = 0
+closeButton.Text = "×"
+closeButton.TextColor3 = Color3.fromRGB(225, 120, 120)
+closeButton.TextSize = 18
+closeButton.Font = Enum.Font.GothamMedium
+closeButton.Parent = header
+uiCorner(closeButton, 6)
+
+local sidebar = Instance.new("Frame")
+sidebar.Name = "Sidebar"
+sidebar.Size = UDim2.fromOffset(138, 370)
+sidebar.Position = UDim2.fromOffset(10, 50)
+sidebar.BackgroundColor3 = Color3.fromRGB(17, 18, 21)
+sidebar.BorderSizePixel = 0
+sidebar.Parent = main
+uiCorner(sidebar, 8)
+
+local function makeTab(text, y)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -12, 0, 35)
+	b.Position = UDim2.fromOffset(6, y)
+	b.BackgroundColor3 = Color3.fromRGB(23, 25, 30)
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(170, 174, 184)
+	b.TextSize = 12
+	b.Font = Enum.Font.GothamMedium
+	b.Parent = sidebar
+	uiCorner(b, 6)
+	return b
+end
+
+local materialsTabButton = makeTab("Materials", 7)
+local trackerTabButton = makeTab("Tracker", 48)
+local playerTabButton = makeTab("Player", 89)
+local serverTabButton = makeTab("Server", 130)
+local diagnosticTabButton = makeTab("Diagnostic", 171)
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, -166, 1, -60)
+content.Position = UDim2.fromOffset(156, 50)
+content.BackgroundTransparency = 1
+content.Parent = main
+
+local pages = {}
+
+local function makePage(name)
+	local p = Instance.new("Frame")
+	p.Name = name
+	p.Size = UDim2.fromScale(1, 1)
+	p.BackgroundTransparency = 1
+	p.Visible = false
+	p.Parent = content
+	pages[name] = p
+	return p
+end
+
+local materialsPage = makePage("Materials")
+local trackerPage = makePage("Tracker")
+local playerPage = makePage("Player")
+local serverPage = makePage("Server")
+local diagnosticPage = makePage("Diagnostic")
+
+local function pageTitle(page, text, subtitle)
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(1, 0, 0, 28)
+	t.BackgroundTransparency = 1
+	t.Text = text
+	t.TextColor3 = Color3.fromRGB(242, 243, 245)
+	t.TextSize = 20
+	t.Font = Enum.Font.GothamMedium
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.Parent = page
+
+	local s = Instance.new("TextLabel")
+	s.Size = UDim2.new(1, 0, 0, 32)
+	s.Position = UDim2.fromOffset(0, 30)
+	s.BackgroundTransparency = 1
+	s.Text = subtitle
+	s.TextColor3 = Color3.fromRGB(126, 131, 142)
+	s.TextSize = 11
+	s.Font = Enum.Font.Gotham
+	s.TextWrapped = true
+	s.TextXAlignment = Enum.TextXAlignment.Left
+	s.TextYAlignment = Enum.TextYAlignment.Top
+	s.Parent = page
+end
+
+-- MATERIALS
+pageTitle(materialsPage, "Materials", "Only materials currently detected by the tracker appear here.")
+
+local materialList = Instance.new("ScrollingFrame")
+materialList.Size = UDim2.new(1, 0, 1, -72)
+materialList.Position = UDim2.fromOffset(0, 68)
+materialList.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
+materialList.BorderSizePixel = 0
+materialList.ScrollBarThickness = 4
+materialList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+materialList.CanvasSize = UDim2.fromOffset(0, 0)
+materialList.Parent = materialsPage
+uiCorner(materialList, 8)
+
+local materialPadding = Instance.new("UIPadding")
+materialPadding.PaddingTop = UDim.new(0, 7)
+materialPadding.PaddingBottom = UDim.new(0, 7)
+materialPadding.PaddingLeft = UDim.new(0, 7)
+materialPadding.PaddingRight = UDim.new(0, 7)
+materialPadding.Parent = materialList
+
+local materialLayout = Instance.new("UIListLayout")
+materialLayout.Padding = UDim.new(0, 6)
+materialLayout.SortOrder = Enum.SortOrder.LayoutOrder
+materialLayout.Parent = materialList
+
+local emptyMaterials = Instance.new("TextLabel")
+emptyMaterials.Size = UDim2.new(1, -10, 0, 42)
+emptyMaterials.BackgroundTransparency = 1
+emptyMaterials.Text = "No materials detected"
+emptyMaterials.TextColor3 = Color3.fromRGB(112, 117, 128)
+emptyMaterials.TextSize = 12
+emptyMaterials.Font = Enum.Font.Gotham
+emptyMaterials.Parent = materialList
+
+-- TRACKER
+pageTitle(trackerPage, "Tracker", "Visual tracking remains the base for material detection and future navigation.")
+
+local trackButton = Instance.new("TextButton")
+trackButton.Size = UDim2.fromOffset(170, 36)
+trackButton.Position = UDim2.fromOffset(0, 76)
+trackButton.BackgroundColor3 = Color3.fromRGB(32, 35, 42)
+trackButton.BorderSizePixel = 0
+trackButton.Text = "TRACK ITEMS: OFF"
+trackButton.TextColor3 = Color3.fromRGB(235, 236, 240)
+trackButton.TextSize = 12
+trackButton.Font = Enum.Font.GothamBold
+trackButton.Parent = trackerPage
+uiCorner(trackButton, 7)
+
+local stopNavigationButton = Instance.new("TextButton")
+stopNavigationButton.Size = UDim2.fromOffset(110, 36)
+stopNavigationButton.Position = UDim2.fromOffset(180, 76)
+stopNavigationButton.BackgroundColor3 = Color3.fromRGB(49, 31, 34)
+stopNavigationButton.BorderSizePixel = 0
+stopNavigationButton.Text = "STOP AI"
+stopNavigationButton.TextColor3 = Color3.fromRGB(229, 169, 173)
+stopNavigationButton.TextSize = 12
+stopNavigationButton.Font = Enum.Font.GothamBold
+stopNavigationButton.Parent = trackerPage
+uiCorner(stopNavigationButton, 7)
+
+local trackerStatus = Instance.new("TextLabel")
+trackerStatus.Size = UDim2.new(1, 0, 0, 70)
+trackerStatus.Position = UDim2.fromOffset(0, 124)
+trackerStatus.BackgroundTransparency = 1
+trackerStatus.Text = "Tracker is off."
+trackerStatus.TextColor3 = Color3.fromRGB(146, 151, 162)
+trackerStatus.TextSize = 12
+trackerStatus.Font = Enum.Font.Gotham
+trackerStatus.TextWrapped = true
+trackerStatus.TextXAlignment = Enum.TextXAlignment.Left
+trackerStatus.TextYAlignment = Enum.TextYAlignment.Top
+trackerStatus.Parent = trackerPage
+
+local navigationStatus = Instance.new("TextLabel")
+navigationStatus.Size = UDim2.new(1, 0, 0, 96)
+navigationStatus.Position = UDim2.fromOffset(0, 205)
+navigationStatus.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
+navigationStatus.BackgroundTransparency = 0.2
+navigationStatus.BorderSizePixel = 0
+navigationStatus.Text = "AI: idle\nPress GO next to a detected material."
+navigationStatus.TextColor3 = Color3.fromRGB(181, 185, 194)
+navigationStatus.TextSize = 11
+navigationStatus.Font = Enum.Font.Gotham
+navigationStatus.TextWrapped = true
+navigationStatus.TextXAlignment = Enum.TextXAlignment.Left
+navigationStatus.TextYAlignment = Enum.TextYAlignment.Top
+navigationStatus.Parent = trackerPage
+uiCorner(navigationStatus, 7)
+uiStroke(navigationStatus, 0.62)
+
+local navigationPadding = Instance.new("UIPadding")
+navigationPadding.PaddingTop = UDim.new(0, 9)
+navigationPadding.PaddingBottom = UDim.new(0, 9)
+navigationPadding.PaddingLeft = UDim.new(0, 10)
+navigationPadding.PaddingRight = UDim.new(0, 10)
+navigationPadding.Parent = navigationStatus
+
+stopNavigationButton.MouseButton1Click:Connect(function()
+	if stopNavigation then
+		stopNavigation("Stopped by user.")
+	else
+		navigationStatus.Text = "AI: not initialized yet."
+	end
+end)
+
+-- PLAYER
+pageTitle(playerPage, "Player", "Small local movement adjustments.")
+
+local speedCard = Instance.new("Frame")
+speedCard.Size = UDim2.new(1, 0, 0, 82)
+speedCard.Position = UDim2.fromOffset(0, 74)
+speedCard.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
+speedCard.BorderSizePixel = 0
+speedCard.Parent = playerPage
+uiCorner(speedCard, 8)
+uiStroke(speedCard, 0.5)
+
+local speedName = Instance.new("TextLabel")
+speedName.Size = UDim2.new(1, -180, 0, 24)
+speedName.Position = UDim2.fromOffset(12, 10)
+speedName.BackgroundTransparency = 1
+speedName.Text = "WalkSpeed"
+speedName.TextColor3 = Color3.fromRGB(235, 237, 240)
+speedName.TextSize = 13
+speedName.Font = Enum.Font.GothamMedium
+speedName.TextXAlignment = Enum.TextXAlignment.Left
+speedName.Parent = speedCard
+
+local speedValue = Instance.new("TextLabel")
+speedValue.Size = UDim2.fromOffset(60, 28)
+speedValue.Position = UDim2.new(1, -144, 0, 27)
+speedValue.BackgroundTransparency = 1
+speedValue.Text = "16"
+speedValue.TextColor3 = Color3.fromRGB(210, 213, 220)
+speedValue.TextSize = 15
+speedValue.Font = Enum.Font.GothamMedium
+speedValue.Parent = speedCard
+
+local minusSpeed = Instance.new("TextButton")
+minusSpeed.Size = UDim2.fromOffset(34, 30)
+minusSpeed.Position = UDim2.new(1, -82, 0, 25)
+minusSpeed.BackgroundColor3 = Color3.fromRGB(31, 33, 39)
+minusSpeed.BorderSizePixel = 0
+minusSpeed.Text = "−"
+minusSpeed.TextColor3 = Color3.fromRGB(225, 226, 230)
+minusSpeed.TextSize = 18
+minusSpeed.Font = Enum.Font.GothamMedium
+minusSpeed.Parent = speedCard
+uiCorner(minusSpeed, 6)
+
+local plusSpeed = Instance.new("TextButton")
+plusSpeed.Size = UDim2.fromOffset(34, 30)
+plusSpeed.Position = UDim2.new(1, -42, 0, 25)
+plusSpeed.BackgroundColor3 = Color3.fromRGB(31, 33, 39)
+plusSpeed.BorderSizePixel = 0
+plusSpeed.Text = "+"
+plusSpeed.TextColor3 = Color3.fromRGB(225, 226, 230)
+plusSpeed.TextSize = 17
+plusSpeed.Font = Enum.Font.GothamMedium
+plusSpeed.Parent = speedCard
+uiCorner(plusSpeed, 6)
+
+local speedHint = Instance.new("TextLabel")
+speedHint.Size = UDim2.new(1, -180, 0, 20)
+speedHint.Position = UDim2.fromOffset(12, 39)
+speedHint.BackgroundTransparency = 1
+speedHint.Text = "Changes by exactly 1"
+speedHint.TextColor3 = Color3.fromRGB(114, 119, 130)
+speedHint.TextSize = 10
+speedHint.Font = Enum.Font.Gotham
+speedHint.TextXAlignment = Enum.TextXAlignment.Left
+speedHint.Parent = speedCard
+
+-- SERVER
+pageTitle(serverPage, "Private Server", "Paste a private server link or a server instance id.")
+
+local serverInput = Instance.new("TextBox")
+serverInput.Size = UDim2.new(1, 0, 0, 38)
+serverInput.Position = UDim2.fromOffset(0, 76)
+serverInput.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
+serverInput.BorderSizePixel = 0
+serverInput.PlaceholderText = "https://www.roblox.com/share?code=..."
+serverInput.PlaceholderColor3 = Color3.fromRGB(91, 96, 107)
+serverInput.Text = ""
+serverInput.TextColor3 = Color3.fromRGB(232, 234, 238)
+serverInput.TextSize = 11
+serverInput.Font = Enum.Font.Code
+serverInput.ClearTextOnFocus = false
+serverInput.Parent = serverPage
+uiCorner(serverInput, 7)
+uiStroke(serverInput, 0.55)
+
+local joinServer = Instance.new("TextButton")
+joinServer.Size = UDim2.fromOffset(100, 34)
+joinServer.Position = UDim2.fromOffset(0, 124)
+joinServer.BackgroundColor3 = Color3.fromRGB(42, 129, 78)
+joinServer.BorderSizePixel = 0
+joinServer.Text = "JOIN"
+joinServer.TextColor3 = Color3.fromRGB(245, 250, 247)
+joinServer.TextSize = 12
+joinServer.Font = Enum.Font.GothamBold
+joinServer.Parent = serverPage
+uiCorner(joinServer, 7)
+
+local serverStatus = Instance.new("TextLabel")
+serverStatus.Size = UDim2.new(1, -112, 0, 52)
+serverStatus.Position = UDim2.fromOffset(112, 120)
+serverStatus.BackgroundTransparency = 1
+serverStatus.Text = "Waiting for a link."
+serverStatus.TextColor3 = Color3.fromRGB(125, 130, 141)
+serverStatus.TextSize = 11
+serverStatus.Font = Enum.Font.Gotham
+serverStatus.TextWrapped = true
+serverStatus.TextXAlignment = Enum.TextXAlignment.Left
+serverStatus.TextYAlignment = Enum.TextYAlignment.Center
+serverStatus.Parent = serverPage
+
+-- DIAGNOSTIC
+pageTitle(diagnosticPage, "Diagnostic", "Keep the existing scanner available while we build the navigation system.")
+
+local buttonRow = Instance.new("Frame")
+buttonRow.Size = UDim2.new(1, 0, 0, 34)
+buttonRow.Position = UDim2.fromOffset(0, 70)
+buttonRow.BackgroundTransparency = 1
+buttonRow.Parent = diagnosticPage
+
+local function diagnosticButton(text, width, x)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(width, 30)
+	b.Position = UDim2.fromOffset(x, 0)
+	b.BackgroundColor3 = Color3.fromRGB(31, 33, 39)
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(220, 222, 228)
+	b.TextSize = 11
+	b.Font = Enum.Font.GothamMedium
+	b.Parent = buttonRow
+	uiCorner(b, 6)
+	return b
+end
+
+local scanButton = diagnosticButton("SCAN", 72, 0)
+local liveButton = diagnosticButton("LIVE: OFF", 92, 78)
+local copyButton = diagnosticButton("COPY ALL", 92, 176)
+local clearButton = diagnosticButton("CLEAR", 72, 274)
+
+local diagnosticStatus = Instance.new("TextLabel")
+diagnosticStatus.Size = UDim2.new(1, 0, 0, 30)
+diagnosticStatus.Position = UDim2.fromOffset(0, 108)
+diagnosticStatus.BackgroundTransparency = 1
+diagnosticStatus.Text = "SCAN = current objects | LIVE = newly created objects"
+diagnosticStatus.TextColor3 = Color3.fromRGB(120, 125, 136)
+diagnosticStatus.TextSize = 10
+diagnosticStatus.Font = Enum.Font.Gotham
+diagnosticStatus.TextXAlignment = Enum.TextXAlignment.Left
+diagnosticStatus.Parent = diagnosticPage
+
+local resultsFrame = Instance.new("ScrollingFrame")
+resultsFrame.Size = UDim2.new(1, 0, 1, -145)
+resultsFrame.Position = UDim2.fromOffset(0, 140)
+resultsFrame.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
+resultsFrame.BorderSizePixel = 0
+resultsFrame.ScrollBarThickness = 4
+resultsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+resultsFrame.CanvasSize = UDim2.fromOffset(0, 0)
+resultsFrame.Parent = diagnosticPage
+uiCorner(resultsFrame, 8)
+
+local resultsPadding = Instance.new("UIPadding")
+resultsPadding.PaddingTop = UDim.new(0, 7)
+resultsPadding.PaddingBottom = UDim.new(0, 7)
+resultsPadding.PaddingLeft = UDim.new(0, 7)
+resultsPadding.PaddingRight = UDim.new(0, 7)
+resultsPadding.Parent = resultsFrame
+
+local resultsLayout = Instance.new("UIListLayout")
+resultsLayout.Padding = UDim.new(0, 5)
+resultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+resultsLayout.Parent = resultsFrame
+
+-- MINIMIZED BUTTON
+local miniButton = Instance.new("TextButton")
+miniButton.Size = UDim2.fromOffset(44, 44)
+miniButton.Position = UDim2.new(0.5, -22, 0.5, -22)
+miniButton.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
+miniButton.BorderSizePixel = 0
+miniButton.Text = "S"
+miniButton.TextColor3 = Color3.fromRGB(235, 237, 240)
+miniButton.TextSize = 16
+miniButton.Font = Enum.Font.GothamBold
+miniButton.Visible = false
+miniButton.Active = true
+miniButton.Draggable = true
+miniButton.Parent = gui
+uiCorner(miniButton, 9)
+uiStroke(miniButton, 0.32)
+
+local currentPage = nil
+
+local function showPage(name, button)
+	for pageName, page in pairs(pages) do
+		page.Visible = pageName == name
+	end
+
+	for _, b in ipairs({
+		materialsTabButton,
+		trackerTabButton,
+		playerTabButton,
+		serverTabButton,
+		diagnosticTabButton
+	}) do
+		b.BackgroundColor3 = Color3.fromRGB(23, 25, 30)
+		b.TextColor3 = Color3.fromRGB(150, 154, 165)
+	end
+
+	button.BackgroundColor3 = Color3.fromRGB(34, 37, 44)
+	button.TextColor3 = Color3.fromRGB(241, 242, 245)
+	currentPage = name
+end
+
+materialsTabButton.MouseButton1Click:Connect(function()
+	showPage("Materials", materialsTabButton)
+end)
+
+trackerTabButton.MouseButton1Click:Connect(function()
+	showPage("Tracker", trackerTabButton)
+end)
+
+playerTabButton.MouseButton1Click:Connect(function()
+	showPage("Player", playerTabButton)
+end)
+
+serverTabButton.MouseButton1Click:Connect(function()
+	showPage("Server", serverTabButton)
+end)
+
+diagnosticTabButton.MouseButton1Click:Connect(function()
+	showPage("Diagnostic", diagnosticTabButton)
+end)
+
+showPage("Materials", materialsTabButton)
+
+minimizeButton.MouseButton1Click:Connect(function()
+	main.Visible = false
+	miniButton.Visible = true
+end)
+
+miniButton.MouseButton1Click:Connect(function()
+	miniButton.Visible = false
+	main.Visible = true
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+	navigationToken += 1
+	navigationRunning = false
+
+	if descendantConnection then
+		descendantConnection:Disconnect()
+		descendantConnection = nil
+	end
+
+	if trackerConnection then
+		trackerConnection:Disconnect()
+		trackerConnection = nil
+	end
+
+	for _, visual in pairs(trackerVisuals) do
+		for _, object in pairs(visual) do
+			if typeof(object) == "Instance" then
+				pcall(function()
+					object:Destroy()
+				end)
+			end
+		end
+	end
+
+	gui:Destroy()
+end)
+
+local function currentHumanoid()
+	local character = player.Character
+	return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function refreshSpeedValue()
+	local humanoid = currentHumanoid()
+	speedValue.Text = humanoid and tostring(math.floor(humanoid.WalkSpeed + 0.5)) or "?"
+end
+
+minusSpeed.MouseButton1Click:Connect(function()
+	local humanoid = currentHumanoid()
+	if humanoid then
+		humanoid.WalkSpeed = math.max(1, humanoid.WalkSpeed - 1)
+		refreshSpeedValue()
+	end
+end)
+
+plusSpeed.MouseButton1Click:Connect(function()
+	local humanoid = currentHumanoid()
+	if humanoid then
+		humanoid.WalkSpeed = humanoid.WalkSpeed + 1
+		refreshSpeedValue()
+	end
+end)
+
+player.CharacterAdded:Connect(function()
+	task.wait(1)
+	refreshSpeedValue()
+end)
+
+refreshSpeedValue()
+
+local function getExternalUrlOpener()
+	if type(openurl) == "function" then
+		return openurl
+	end
+
+	if type(open_url) == "function" then
+		return open_url
+	end
+
+	if syn and type(syn.open_url) == "function" then
+		return syn.open_url
+	end
+
+	return nil
+end
+
+local function copyToClipboard(text)
+	local clipboard =
+		(type(setclipboard) == "function" and setclipboard)
+		or (type(toclipboard) == "function" and toclipboard)
+		or (syn and type(syn.write_clipboard) == "function" and syn.write_clipboard)
+
+	if clipboard then
+		local ok = pcall(function()
+			clipboard(text)
+		end)
+		return ok
+	end
+
+	return false
+end
+
+local function cleanServerInput(raw)
+	local text = tostring(raw or "")
+	text = text:gsub("\\_", "_")
+
+	local url = text:match("(https?://[^%s%)%]]+)")
+	if url then
+		text = url
+	end
+
+	text = text:gsub('[">]+$', "")
+	text = text:gsub("%s+", "")
+	return text
+end
+
+joinServer.MouseButton1Click:Connect(function()
+	local text = cleanServerInput(serverInput.Text)
+
+	if text == "" then
+		serverStatus.Text = "Paste a server link first."
+		return
+	end
+
+	serverInput.Text = text
+
+	local joinGuardId = text:match("^https?://join%-guard%.solsstattracker%.com/([%w_%-]+)")
+
+	if joinGuardId then
+		serverStatus.Text = "Join Guard detected. Opening verification..."
+
+		local opener = getExternalUrlOpener()
+
+		if opener then
+			local ok, err = pcall(function()
+				opener(text)
+			end)
+
+			if not ok then
+				serverStatus.Text = "Could not open URL: " .. tostring(err)
+			end
+		else
+			local copied = copyToClipboard(text)
+
+			if copied then
+				serverStatus.Text =
+					"Join Guard requires browser verification. Link copied — open it in your browser."
+			else
+				serverStatus.Text =
+					"Join Guard requires browser verification. Open the pasted link manually."
+			end
+		end
+
+		return
+	end
+
+	local gameInstanceId = text:match("[?&]gameInstanceId=([^&]+)")
+
+	if gameInstanceId then
+		serverStatus.Text = "Joining server instance..."
+
+		local ok, err = pcall(function()
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, gameInstanceId, player)
+		end)
+
+		if not ok then
+			serverStatus.Text = "Join failed: " .. tostring(err)
+		end
+		return
+	end
+
+	if string.find(lowered(text), "roblox.com/", 1, true)
+		and (
+			text:match("[?&]code=([^&]+)")
+			or text:match("[?&]privateServerLinkCode=([^&]+)")
+		) then
+
+		local opener = getExternalUrlOpener()
+
+		if opener then
+			serverStatus.Text = "Opening Roblox private server link..."
+
+			local ok, err = pcall(function()
+				opener(text)
+			end)
+
+			if not ok then
+				serverStatus.Text = "Could not open Roblox link: " .. tostring(err)
+			end
+		else
+			local copied = copyToClipboard(text)
+			serverStatus.Text = copied
+				and "Private server link copied. Open it in your browser."
+				or "Open this private server link in your browser."
+		end
+
+		return
+	end
+
+	if #text > 20 and not string.find(lowered(text), "http", 1, true) then
+		serverStatus.Text = "Joining JobId..."
+
+		local ok, err = pcall(function()
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, text, player)
+		end)
+
+		if not ok then
+			serverStatus.Text = "Server id failed: " .. tostring(err)
+		end
+
+		return
+	end
+
+	serverStatus.Text = "Unsupported server link format."
+end)
+
+local function clearMaterialRows()
+	for _, row in pairs(materialRows) do
+		if row.frame and row.frame.Parent then
+			row.frame:Destroy()
+		end
+	end
+	materialRows = {}
+end
+
+local function refreshMaterialsUI(entries)
+	clearMaterialRows()
+
+	local materialEntries = {}
+
+	for _, entry in ipairs(entries or {}) do
+		local biome, cleanName = getMaterialBiome(entry.name)
+		entry.name = cleanName
+
+		table.insert(materialEntries, {
+			entry = entry,
+			biome = biome
+		})
+	end
+
+	emptyMaterials.Visible = #materialEntries == 0
+
+	for index, data in ipairs(materialEntries) do
+		local entry = data.entry
+
+		local row = Instance.new("Frame")
+		row.Name = "Material_" .. index
+		row.Size = UDim2.new(1, -4, 0, 58)
+		row.BackgroundColor3 = Color3.fromRGB(19, 20, 24)
+		row.BorderSizePixel = 0
+		row.LayoutOrder = index
+		row.Parent = materialList
+		uiCorner(row, 7)
+		uiStroke(row, 0.62)
+
+		local name = Instance.new("TextLabel")
+		name.Size = UDim2.new(1, -155, 0, 24)
+		name.Position = UDim2.fromOffset(10, 6)
+		name.BackgroundTransparency = 1
+		name.Text = entry.name
+		name.TextColor3 = Color3.fromRGB(239, 240, 243)
+		name.TextSize = 13
+		name.Font = Enum.Font.GothamMedium
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.Parent = row
+
+		local details = Instance.new("TextLabel")
+		details.Size = UDim2.new(1, -155, 0, 18)
+		details.Position = UDim2.fromOffset(10, 31)
+		details.BackgroundTransparency = 1
+		details.Text =
+			data.biome ..
+			"  •  " ..
+			tostring(math.floor(entry.distance + 0.5)) ..
+			" studs"
+		details.TextColor3 = Color3.fromRGB(124, 129, 140)
+		details.TextSize = 10
+		details.Font = Enum.Font.Gotham
+		details.TextXAlignment = Enum.TextXAlignment.Left
+		details.Parent = row
+
+		local go = Instance.new("TextButton")
+		go.Size = UDim2.fromOffset(70, 30)
+		go.Position = UDim2.new(1, -80, 0.5, -15)
+		go.BackgroundColor3 = Color3.fromRGB(43, 137, 81)
+		go.BorderSizePixel = 0
+		go.Text = "GO"
+		go.TextColor3 = Color3.fromRGB(247, 251, 248)
+		go.TextSize = 11
+		go.Font = Enum.Font.GothamBold
+		go.Parent = row
+		uiCorner(go, 6)
+
+		go.MouseButton1Click:Connect(function()
+			selectedMaterialModel = entry.model
+			selectedMaterialName = entry.name
+
+			showPage("Tracker", trackerTabButton)
+
+			if startNavigation then
+				startNavigation(entry)
+			else
+				navigationStatus.Text =
+					"AI error: navigation module has not initialized."
+			end
+		end)
+
+		materialRows[entry.model] = {
+			frame = row,
+			name = entry.name
+		}
+	end
+end
+
+-- =========================================================
+-- ITEM TRACKER
+-- =========================================================
+
+local trackerBlacklistNames = {
+	["fishshop"] = true, ["miscs"] = true, ["casecover"] = true,
+	["startflip"] = true, ["rig"] = true, ["r6"] = true,
+	["bankposition"] = true, ["summereventturrets"] = true,
+	["questboard"] = true, ["lime"] = true, ["title"] = true,
+	["shop"] = true, ["inter"] = true, ["portal"] = true,
+	["liquid"] = true, ["bottomjoint"] = true,
+}
+
+local function trackerRoot()
+	local character = player.Character
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function containsExcludedText(value)
+	local text = lowered(value)
+	return string.find(text, "clover", 1, true) ~= nil
+		or string.find(text, "four leaf", 1, true) ~= nil
+		or string.find(text, "four-leaf", 1, true) ~= nil
+		or string.find(text, "luck buff", 1, true) ~= nil
+end
+
+local function modelContainsExcludedText(model)
+	if not model then
+		return true
+	end
+
+	if containsExcludedText(model.Name) then
+		return true
+	end
+
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if containsExcludedText(descendant.Name) then
+			return true
+		end
+
+		if descendant:IsA("ProximityPrompt") then
+			if containsExcludedText(descendant.ActionText)
+				or containsExcludedText(descendant.ObjectText) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function findPickupModelFromPrompt(prompt)
+	if not prompt or not prompt.Parent then
+		return nil
+	end
+
+	local current = prompt.Parent
+	local map = Workspace:FindFirstChild("Map")
+
+	while current and current ~= Workspace do
+		if current:IsA("Model") then
+			if map and current.Parent == map then
+				return current
+			end
+
+			if current.Parent and lowered(current.Parent.Name) == "spawneditems" then
+				return current
+			end
+		end
+
+		current = current.Parent
+	end
+
+	return nil
+end
+
+local function promptLooksLikePickup(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
+		return false
+	end
+
+	local action = lowered(prompt.ActionText)
+	local objectText = lowered(prompt.ObjectText)
+
+	if containsExcludedText(action) or containsExcludedText(objectText) then
+		return false
+	end
+
+	if action == "pick up" or action == "pickup" or action == "collect" or action == "take" then
+		return true
+	end
+
+	local parent = prompt.Parent
+	local gp = parent and parent.Parent and lowered(parent.Parent.Name) or ""
+
+	if trackerBlacklistNames[gp] then
+		return false
+	end
+
+	if gp == "map" or gp == "spawneditems" then
+		return true
+	end
+
+	return findPickupModelFromPrompt(prompt) ~= nil
+end
+
+local function targetPartForModel(model, prompt)
+	if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+		return prompt.Parent
+	end
+
+	local bottle = model:FindFirstChild("Bottle", true)
+	if bottle and bottle:IsA("BasePart") then
+		return bottle
+	end
+
+	local windB = model:FindFirstChild("windb", true)
+	if windB and windB:IsA("BasePart") then
+		return windB
+	end
+
+	local windC = model:FindFirstChild("windc", true)
+	if windC and windC:IsA("BasePart") then
+		return windC
+	end
+
+	local hitox = model:FindFirstChild("Hitox", true)
+	if hitox and hitox:IsA("BasePart") then
+		return hitox
+	end
+
+	local nullPart = model:FindFirstChild("Null", true) or model:FindFirstChild("NULL", true) or model:FindFirstChild("NULL?", true)
+	if nullPart and nullPart:IsA("BasePart") then
+		return nullPart
+	end
+
+	return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function detectedItemName(model, prompt)
+	local objectText = prompt and tostring(prompt.ObjectText or "") or ""
+	local actionText = prompt and tostring(prompt.ActionText or "") or ""
+
+	if objectText ~= "" and lowered(objectText) ~= "item" and lowered(objectText) ~= "object"
+		and not containsExcludedText(objectText) then
+		local _, standardName = getMaterialBiome(objectText)
+		return standardName
+	end
+
+	local modelName = model and model.Name or ""
+	local lowerModelName = lowered(modelName)
+	if modelName ~= "" and lowerModelName ~= "model" and lowerModelName ~= "spawneditems" and lowerModelName ~= "workspace" and not containsExcludedText(modelName) then
+		local biome, standardName = getMaterialBiome(modelName)
+		if biome ~= "Special / Other" then
+			return standardName
+		end
+	end
+
+	if actionText ~= "" and lowered(actionText) ~= "pick up" and lowered(actionText) ~= "pickup"
+		and lowered(actionText) ~= "interact" and not containsExcludedText(actionText) then
+		local _, standardName = getMaterialBiome(actionText)
+		return standardName
+	end
+
+	if model:FindFirstChild("Null", true) or model:FindFirstChild("NULL", true) or model:FindFirstChild("null", true)
+		or model:FindFirstChild("NULL?", true) or model:FindFirstChild("Null?", true) then
+		return "NULL?"
+	end
+
+	if model:FindFirstChild("windb", true) or model:FindFirstChild("windc", true) then
+		return "Wind Essence"
+	end
+
+	if model:FindFirstChild("Bottle", true) then
+		return "Rainy Bottle"
+	end
+
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			local n = tostring(descendant.Name)
+			local ln = lowered(n)
+
+			if n ~= "" and ln ~= "meshpart" and ln ~= "part" and ln ~= "hitox" and not containsExcludedText(n) then
+				local biome, standardName = getMaterialBiome(n)
+				if biome ~= "Special / Other" then
+					return standardName
+				end
+				return n
+			end
+		end
+	end
+
+	return "Material"
+end
+
+local function getAllPickupEntries()
+	local root = trackerRoot()
+	local entries = {}
+	local seen = {}
+
+	if not root then
+		return entries
+	end
+
+	for _, descendant in ipairs(Workspace:GetDescendants()) do
+		if descendant:IsA("ProximityPrompt") and promptLooksLikePickup(descendant) then
+			local model = findPickupModelFromPrompt(descendant)
+
+			if model and not seen[model] and not modelContainsExcludedText(model) then
+				local part = targetPartForModel(model, descendant)
+
+				if part then
+					seen[model] = true
+					table.insert(entries, {
+						model = model,
+						prompt = descendant,
+						part = part,
+						name = detectedItemName(model, descendant),
+						distance = (root.Position - part.Position).Magnitude,
+					})
+				end
+			end
+		end
+	end
+
+	table.sort(entries, function(a, b)
+		return a.distance < b.distance
+	end)
+
+	return entries
+end
+
+-- =========================================================
+-- NAVIGATION AI
+-- =========================================================
+
+local NAV_MAX_REPATHS = 8
+local NAV_WAYPOINT_TIMEOUT = 4.5
+local NAV_STUCK_TIME = 1.35
+local NAV_REACH_DISTANCE = 4.0
+
+local function setNavigationStatus(line1, line2, line3)
+	local lines = {line1}
+
+	if line2 and line2 ~= "" then
+		table.insert(lines, line2)
+	end
+
+	if line3 and line3 ~= "" then
+		table.insert(lines, line3)
+	end
+
+	navigationStatus.Text = table.concat(lines, "\n")
+end
+
+local function navigationCharacter()
+	local character = player.Character
+	if not character then
+		return nil, nil, nil
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+
+	if not humanoid or not root or humanoid.Health <= 0 then
+		return character, nil, nil
+	end
+
+	return character, humanoid, root
+end
+
+local function safeGroundAt(position, character)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = character and {character} or {}
+	params.IgnoreWater = false
+
+	local origin = position + Vector3.new(0, 4, 0)
+	local direction = Vector3.new(0, -14, 0)
+
+	return Workspace:Raycast(origin, direction, params) ~= nil
+end
+
+local function tryFirePrompt(prompt)
+	if not prompt or not prompt.Parent or not prompt.Enabled then
+		return false, "Pickup prompt disappeared."
+	end
+
+	if type(fireproximityprompt) == "function" then
+		local ok, err = pcall(function()
+			fireproximityprompt(prompt, 0)
+		end)
+
+		return ok, ok and nil or tostring(err)
+	end
+
+	return false, "Executor has no fireproximityprompt; press E manually."
+end
+
+local function waitForWaypoint(token, humanoid, root, destination)
+	local started = os.clock()
+	local lastMovementTime = os.clock()
+	local lastPosition = root.Position
+	local jumpAttempted = false
+
+	while os.clock() - started < NAV_WAYPOINT_TIMEOUT do
+		if token ~= navigationToken or not navigationRunning then
+			return false, "cancelled"
+		end
+
+		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then
+			return false, "character unavailable"
+		end
+
+		local distance = (root.Position - destination).Magnitude
+
+		if distance <= NAV_REACH_DISTANCE then
+			return true
+		end
+
+		local moved = (root.Position - lastPosition).Magnitude
+
+		if moved >= 0.8 then
+			lastPosition = root.Position
+			lastMovementTime = os.clock()
+		elseif os.clock() - lastMovementTime >= NAV_STUCK_TIME then
+			if not jumpAttempted then
+				humanoid.Jump = true
+				jumpAttempted = true
+				lastMovementTime = os.clock()
+			else
+				return false, "stuck"
+			end
+		end
+
+		task.wait(0.08)
+	end
+
+	return false, "waypoint timeout"
+end
+
+local function directFinalApproach(token, entry, humanoid, root)
+	if not entry.part or not entry.part.Parent then
+		return false
+	end
+
+	local distance = (root.Position - entry.part.Position).Magnitude
+
+	if distance > 11 then
+		return false
+	end
+
+	if not safeGroundAt(entry.part.Position, player.Character) then
+		return false
+	end
+
+	humanoid:MoveTo(entry.part.Position)
+
+	local ok = waitForWaypoint(
+		token,
+		humanoid,
+		root,
+		entry.part.Position
+	)
+
+	return ok
+end
+
+local function followComputedPath(token, entry, humanoid, root)
+	if not entry.part or not entry.part.Parent then
+		return false, "Target disappeared."
+	end
+
+	local path = PathfindingService:CreatePath({
+		AgentRadius = 2,
+		AgentHeight = 5,
+		AgentCanJump = true,
+		AgentCanClimb = true,
+		AgentJumpHeight = 7,
+		AgentMaxSlope = 45,
+		WaypointSpacing = 4,
+	})
+
+	local ok, computeError = pcall(function()
+		path:ComputeAsync(root.Position, entry.part.Position)
+	end)
+
+	if not ok then
+		return false, "Path error: " .. tostring(computeError)
+	end
+
+	if path.Status ~= Enum.PathStatus.Success then
+		return false, "No safe path."
+	end
+
+	local waypoints = path:GetWaypoints()
+
+	if #waypoints < 2 then
+		return directFinalApproach(token, entry, humanoid, root), "Short path."
+	end
+
+	for index = 2, #waypoints do
+		if token ~= navigationToken or not navigationRunning then
+			return false, "cancelled"
+		end
+
+		if not entry.model or not entry.model.Parent
+			or not entry.part or not entry.part.Parent then
+			return false, "Target disappeared."
+		end
+
+		local waypoint = waypoints[index]
+
+		if not safeGroundAt(waypoint.Position, player.Character) then
+			return false, "Unsafe waypoint; recalculating."
+		end
+
+		local currentDistance = (root.Position - entry.part.Position).Magnitude
+
+		if currentDistance <= math.max(5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 0.5) then
+			return true, "Reached pickup range."
+		end
+
+		if waypoint.Action == Enum.PathWaypointAction.Jump then
+			humanoid.Jump = true
+		end
+
+		setNavigationStatus(
+			"AI: walking to " .. entry.name,
+			"Waypoint " .. tostring(index - 1) .. "/" .. tostring(#waypoints - 1),
+			tostring(math.floor(currentDistance + 0.5)) .. " studs remaining"
+		)
+
+		humanoid:MoveTo(waypoint.Position)
+
+		local reached, why = waitForWaypoint(
+			token,
+			humanoid,
+			root,
+			waypoint.Position
+		)
+
+		if not reached then
+			return false, why
+		end
+	end
+
+	return true, "Path completed."
+end
+
+stopNavigation = function(reason)
+	navigationToken += 1
+	navigationRunning = false
+	navigationTargetModel = nil
+	navigationTargetName = nil
+
+	local _, humanoid, root = navigationCharacter()
+
+	if humanoid and root then
+		humanoid:MoveTo(root.Position)
+	end
+
+	setNavigationStatus(
+		"AI: idle",
+		reason or "Navigation stopped."
+	)
+end
+
+startNavigation = function(entry)
+	if not entry or not entry.model or not entry.model.Parent
+		or not entry.part or not entry.part.Parent then
+		setNavigationStatus("AI: error", "Selected material no longer exists.")
+		return
+	end
+
+	navigationToken += 1
+	local token = navigationToken
+
+	navigationRunning = true
+	navigationTargetModel = entry.model
+	navigationTargetName = entry.name
+
+	setNavigationStatus(
+		"AI: preparing route",
+		entry.name,
+		tostring(math.floor(entry.distance + 0.5)) .. " studs away"
+	)
+
+	pcall(function()
+		StarterGui:SetCore("SendNotification", {
+			Title = "Navigation AI",
+			Text = "Going to " .. entry.name,
+			Duration = 3
+		})
+	end)
+
+	task.spawn(function()
+		for attempt = 1, NAV_MAX_REPATHS do
+			if token ~= navigationToken or not navigationRunning then
+				return
+			end
+
+			if not entry.model.Parent or not entry.part.Parent then
+				stopNavigation("Material disappeared before arrival.")
+				return
+			end
+
+			local character, humanoid, root = navigationCharacter()
+
+			if not humanoid or not root then
+				stopNavigation("Character is unavailable.")
+				return
+			end
+
+			local targetDistance = (root.Position - entry.part.Position).Magnitude
+			local activationDistance =
+				entry.prompt and math.max(4, entry.prompt.MaxActivationDistance) or 8
+
+			if targetDistance <= activationDistance then
+				setNavigationStatus(
+					"AI: reached " .. entry.name,
+					"Picking up material..."
+				)
+
+				local fired, fireError = tryFirePrompt(entry.prompt)
+
+				if fired then
+					task.wait(0.45)
+
+					if not entry.model.Parent then
+						navigationRunning = false
+						setNavigationStatus(
+							"AI: complete",
+							entry.name .. " picked up."
+						)
+						return
+					end
+
+					task.wait(0.65)
+
+					if not entry.model.Parent then
+						navigationRunning = false
+						setNavigationStatus(
+							"AI: complete",
+							entry.name .. " picked up."
+						)
+						return
+					end
+
+					setNavigationStatus(
+						"AI: pickup sent",
+						"Waiting / recalculating if needed..."
+					)
+				else
+					navigationRunning = false
+					setNavigationStatus(
+						"AI: arrived",
+						fireError or "Press E to pick up."
+					)
+					return
+				end
+			end
+
+			setNavigationStatus(
+				"AI: calculating safe route",
+				entry.name,
+				"Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS)
+			)
+
+			local reached, reason = followComputedPath(
+				token,
+				entry,
+				humanoid,
+				root
+			)
+
+			if token ~= navigationToken or not navigationRunning then
+				return
+			end
+
+			if reached then
+				task.wait(0.12)
+			else
+				setNavigationStatus(
+					"AI: recalculating",
+					reason or "Path failed.",
+					"Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS)
+				)
+
+				task.wait(0.22)
+			end
+		end
+
+		if token == navigationToken and navigationRunning then
+			navigationRunning = false
+			setNavigationStatus(
+				"AI: failed",
+				"Could not find a safe route after several attempts."
+			)
+		end
+	end)
+end
+
+local function destroyTrackerVisual(model)
+	local visual = trackerVisuals[model]
+	if not visual then return end
+
+	for _, object in pairs(visual) do
+		if typeof(object) == "Instance" then
+			pcall(function() object:Destroy() end)
+		end
+	end
+
+	trackerVisuals[model] = nil
+end
+
+local function clearTrackerVisuals()
+	local models = {}
+	for model in pairs(trackerVisuals) do
+		table.insert(models, model)
+	end
+
+	for _, model in ipairs(models) do
+		destroyTrackerVisual(model)
+	end
+end
+
+local function createTrackerVisual(model, targetPart)
+	local root = trackerRoot()
+	if not root or not model or not targetPart then return end
+
+	destroyTrackerVisual(model)
+
+	local sourceAttachment = Instance.new("Attachment")
+	sourceAttachment.Name = "SolsTrackerSource"
+	sourceAttachment.Parent = root
+
+	local targetAttachment = Instance.new("Attachment")
+	targetAttachment.Name = "SolsTrackerTarget"
+	targetAttachment.Parent = targetPart
+
+	local beam = Instance.new("Beam")
+	beam.Name = "SolsTrackerBeam"
+	beam.Attachment0 = sourceAttachment
+	beam.Attachment1 = targetAttachment
+	beam.Width0 = 1.15
+	beam.Width1 = 0.78
+	beam.FaceCamera = true
+	beam.LightEmission = 1
+	beam.LightInfluence = 0
+	beam.Brightness = 3
+	beam.Segments = 24
+	beam.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.55, Color3.fromRGB(225, 230, 238)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(190, 198, 210))
+	})
+	beam.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.08),
+		NumberSequenceKeypoint.new(0.1, 0.02),
+		NumberSequenceKeypoint.new(0.9, 0.02),
+		NumberSequenceKeypoint.new(1, 0.15)
+	})
+	beam.Parent = root
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "SolsTrackerHighlight"
+	highlight.Adornee = model
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.FillColor = Color3.fromRGB(235, 238, 244)
+	highlight.FillTransparency = 0.9
+	highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+	highlight.OutlineTransparency = 0.18
+	highlight.Parent = gui
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "SolsTrackerBillboard"
+	billboard.Adornee = targetPart
+	billboard.Size = UDim2.fromOffset(178, 50)
+	billboard.StudsOffset = Vector3.new(0, 3.2, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = gui
+
+	local card = Instance.new("Frame")
+	card.Name = "Card"
+	card.Size = UDim2.fromScale(1, 1)
+	card.BackgroundColor3 = Color3.fromRGB(14, 15, 18)
+	card.BackgroundTransparency = 0.18
+	card.BorderSizePixel = 0
+	card.Parent = billboard
+
+	local cardCorner = Instance.new("UICorner")
+	cardCorner.CornerRadius = UDim.new(0, 7)
+	cardCorner.Parent = card
+
+	local cardStroke = Instance.new("UIStroke")
+	cardStroke.Color = Color3.fromRGB(220, 224, 232)
+	cardStroke.Thickness = 1
+	cardStroke.Transparency = 0.58
+	cardStroke.Parent = card
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Name = "NameLabel"
+	nameLabel.Size = UDim2.new(1, -14, 0, 25)
+	nameLabel.Position = UDim2.fromOffset(7, 4)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.TextColor3 = Color3.fromRGB(248, 249, 251)
+	nameLabel.TextStrokeTransparency = 1
+	nameLabel.TextSize = 14
+	nameLabel.Font = Enum.Font.GothamMedium
+	nameLabel.TextWrapped = true
+	nameLabel.Parent = card
+
+	local distanceLabel = Instance.new("TextLabel")
+	distanceLabel.Name = "DistanceLabel"
+	distanceLabel.Size = UDim2.new(1, -14, 0, 16)
+	distanceLabel.Position = UDim2.fromOffset(7, 28)
+	distanceLabel.BackgroundTransparency = 1
+	distanceLabel.TextColor3 = Color3.fromRGB(166, 172, 184)
+	distanceLabel.TextStrokeTransparency = 1
+	distanceLabel.TextSize = 11
+	distanceLabel.Font = Enum.Font.Gotham
+	distanceLabel.Parent = card
+
+	trackerVisuals[model] = {
+		sourceAttachment = sourceAttachment,
+		targetAttachment = targetAttachment,
+		beam = beam,
+		highlight = highlight,
+		billboard = billboard,
+		card = card,
+		nameLabel = nameLabel,
+		distanceLabel = distanceLabel,
+		targetPart = targetPart,
+	}
+end
+
+local function updateTracker()
+	if not trackerEnabled then return end
+
+	local entries = getAllPickupEntries()
+	refreshMaterialsUI(entries)
+	local active = {}
+
+	for _, entry in ipairs(entries) do
+		active[entry.model] = true
+
+		local visual = trackerVisuals[entry.model]
+		if not visual or not visual.beam or not visual.beam.Parent or visual.targetPart ~= entry.part then
+			createTrackerVisual(entry.model, entry.part)
+			visual = trackerVisuals[entry.model]
+		end
+
+		if visual then
+			if visual.nameLabel then
+				visual.nameLabel.Text = entry.name
+			end
+			if visual.distanceLabel then
+				visual.distanceLabel.Text = tostring(math.floor(entry.distance + 0.5)) .. " studs"
+			end
+		end
+	end
+
+	local stale = {}
+	for model in pairs(trackerVisuals) do
+		if not active[model] or not model.Parent then
+			table.insert(stale, model)
+		end
+	end
+
+	for _, model in ipairs(stale) do
+		destroyTrackerVisual(model)
+	end
+
+	if #entries == 0 then
+		trackerStatus.Text = "No pickup prompts found. Waiting for materials..."
+		return
+	end
+
+	trackerStatus.Text = "Tracked materials: " .. tostring(#entries)
+		.. "\nNearest: " .. entries[1].name
+		.. " — " .. tostring(math.floor(entries[1].distance + 0.5)) .. " studs"
+end
+
+local function startTracker()
+	trackerEnabled = true
+	trackButton.Text = "TRACK ITEMS: ON"
+	trackButton.BackgroundColor3 = Color3.fromRGB(92, 68, 18)
+	trackerStatus.Text = "Scanning pickup prompts..."
+
+	if trackerConnection then
+		trackerConnection:Disconnect()
+	end
+
+	local elapsed = 0
+	trackerConnection = RunService.Heartbeat:Connect(function(dt)
+		elapsed += dt
+		if elapsed >= 0.35 then
+			elapsed = 0
+			updateTracker()
+		end
+	end)
+
+	updateTracker()
+end
+
+local function stopTracker()
+	trackerEnabled = false
+	trackButton.Text = "TRACK ITEMS: OFF"
+	trackButton.BackgroundColor3 = Color3.fromRGB(48, 48, 48)
+
+	if trackerConnection then
+		trackerConnection:Disconnect()
+		trackerConnection = nil
+	end
+
+	clearTrackerVisuals()
+	refreshMaterialsUI({})
+	trackerStatus.Text = "Tracker is off."
+end
+
+trackButton.MouseButton1Click:Connect(function()
+	if trackerEnabled then stopTracker() else startTracker() end
+end)
+
+-- =========================================================
+-- DIAGNOSTIC HELPERS
+-- =========================================================
+
+local function containsKeyword(text)
+	local low = string.lower(text)
+
+	for _, keyword in ipairs(KEYWORDS) do
+		if string.find(low, keyword, 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getCharacterRoot()
+	local character = player.Character
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getObjectPosition(instance)
+	if instance:IsA("BasePart") then
+		return instance.Position
+	end
+
+	if instance:IsA("Model") then
+		local ok, pivot = pcall(function()
+			return instance:GetPivot()
+		end)
+
+		if ok then
+			return pivot.Position
+		end
+	end
+
+	local parent = instance.Parent
+
+	if parent then
+		if parent:IsA("BasePart") then
+			return parent.Position
+		end
+
+		if parent:IsA("Model") then
+			local ok, pivot = pcall(function()
+				return parent:GetPivot()
+			end)
+
+			if ok then
+				return pivot.Position
+			end
+		end
+	end
+
+	return nil
+end
+
+local function getDistance(instance)
+	local root = getCharacterRoot()
+	local position = getObjectPosition(instance)
+
+	if not root or not position then
+		return nil
+	end
+
+	return (root.Position - position).Magnitude
+end
+
+local function getPositionText(instance)
+	local position = getObjectPosition(instance)
+
+	if not position then
+		return "?"
+	end
+
+	return string.format(
+		"%.1f, %.1f, %.1f",
+		position.X,
+		position.Y,
+		position.Z
+	)
+end
+
+local function getPath(instance)
+	local parts = {}
+	local current = instance
+
+	while current and current ~= game do
+		table.insert(parts, 1, current.Name)
+		current = current.Parent
+	end
+
+	return table.concat(parts, ".")
+end
+
+local function isInteresting(instance)
+	if instance:IsA("ProximityPrompt") then
+		return true, "ProximityPrompt"
+	end
+
+	if instance:IsA("ClickDetector") then
+		return true, "ClickDetector"
+	end
+
+	if instance:IsA("TouchTransmitter") then
+		return true, "TouchTransmitter"
+	end
+
+	if (
+		instance:IsA("Model")
+		or instance:IsA("BasePart")
+		or instance:IsA("Tool")
+		or instance:IsA("Folder")
+	) and containsKeyword(instance.Name) then
+		return true, "Name keyword"
+	end
+
+	return false, nil
+end
+
+local function clearRows()
+	for _, child in ipairs(resultsFrame:GetChildren()) do
+		if child:IsA("TextLabel") then
+			child:Destroy()
+		end
+	end
+end
+
+local function addVisualRow(index, entry)
+	local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
+
+	local row = Instance.new("TextLabel")
+	row.Name = "Result_" .. index
+	row.Size = UDim2.new(1, -4, 0, 92)
+	row.BackgroundColor3 = Color3.fromRGB(29, 29, 29)
+	row.BorderSizePixel = 0
+	row.TextColor3 = Color3.fromRGB(225, 225, 225)
+	row.TextSize = 11
+	row.Font = Enum.Font.Code
+	row.TextWrapped = true
+	row.TextXAlignment = Enum.TextXAlignment.Left
+	row.TextYAlignment = Enum.TextYAlignment.Top
+	row.Text =
+		"[" .. index .. "] [" .. entry.source .. "] " ..
+		entry.name .. " <" .. entry.className .. ">" ..
+		"\nReason: " .. entry.reason ..
+		" | Distance: " .. distanceText ..
+		" | Pos: " .. entry.position ..
+		"\nParent: " .. entry.parent ..
+		"\nPath: " .. entry.path
+	row.Parent = resultsFrame
+
+	local rowCorner = Instance.new("UICorner")
+	rowCorner.CornerRadius = UDim.new(0, 5)
+	rowCorner.Parent = row
+end
+
+local function rebuildRows()
+	clearRows()
+
+	for index, entry in ipairs(diagnosticEntries) do
+		addVisualRow(index, entry)
+	end
+end
+
+local function addEntry(instance, reason, source)
+	if not instance or not instance.Parent then
+		return
+	end
+
+	local path = getPath(instance)
+	local uniqueKey = source .. "|" .. path
+
+	if diagnosticSeen[uniqueKey] then
+		return
+	end
+
+	diagnosticSeen[uniqueKey] = true
+
+	local parentName = instance.Parent and instance.Parent:GetFullName() or "?"
+
+	local entry = {
+		source = source,
+		name = instance.Name,
+		className = instance.ClassName,
+		reason = reason,
+		distance = getDistance(instance),
+		position = getPositionText(instance),
+		parent = parentName,
+		path = path
+	}
+
+	table.insert(diagnosticEntries, entry)
+	addVisualRow(#diagnosticEntries, entry)
+
+	local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
+
+	print(
+		string.format(
+			"[SOLS DIAG] source=%s | name=%s | class=%s | reason=%s | distance=%s | position=%s | parent=%s | path=%s",
+			entry.source,
+			entry.name,
+			entry.className,
+			entry.reason,
+			distanceText,
+			entry.position,
+			entry.parent,
+			entry.path
+		)
+	)
+end
+
+local function buildExportText()
+	local lines = {
+		"=== Sol's RNG Diagnostic Export ===",
+		"Entries: " .. tostring(#diagnosticEntries),
+		""
+	}
+
+	for index, entry in ipairs(diagnosticEntries) do
+		local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
+
+		table.insert(
+			lines,
+			string.format(
+				"[%d]\nSource: %s\nName: %s\nClass: %s\nReason: %s\nDistance: %s\nPosition: %s\nParent: %s\nPath: %s\n",
+				index,
+				entry.source,
+				entry.name,
+				entry.className,
+				entry.reason,
+				distanceText,
+				entry.position,
+				entry.parent,
+				entry.path
+			)
+		)
+	end
+
+	return table.concat(lines, "\n")
+end
+
+-- =========================================================
+-- MANUAL SCAN
+-- =========================================================
+
+local function runManualScan()
+	diagnosticStatus.Text = "Scanning Workspace..."
+
+	local beforeCount = #diagnosticEntries
+
+	for _, instance in ipairs(Workspace:GetDescendants()) do
+		local interesting, reason = isInteresting(instance)
+
+		if interesting then
+			addEntry(instance, reason, "SCAN")
+		end
+	end
+
+	local added = #diagnosticEntries - beforeCount
+	diagnosticStatus.Text =
+		"Manual scan complete. Added " ..
+		added ..
+		" | Total entries: " ..
+		#diagnosticEntries
+end
+
+scanButton.MouseButton1Click:Connect(runManualScan)
+
+-- =========================================================
+-- LIVE MONITOR
+-- =========================================================
+
+local function stopLiveMonitor()
+	liveMonitorEnabled = false
+	liveButton.Text = "LIVE: OFF"
+	liveButton.BackgroundColor3 = Color3.fromRGB(48, 48, 48)
+
+	if descendantConnection then
+		descendantConnection:Disconnect()
+		descendantConnection = nil
+	end
+
+	diagnosticStatus.Text = "Live monitor stopped. Total entries: " .. #diagnosticEntries
+end
+
+local function startLiveMonitor()
+	liveMonitorEnabled = true
+	liveButton.Text = "LIVE: ON"
+	liveButton.BackgroundColor3 = Color3.fromRGB(42, 78, 48)
+
+	if descendantConnection then
+		descendantConnection:Disconnect()
+	end
+
+	descendantConnection = Workspace.DescendantAdded:Connect(function(instance)
+		if not liveMonitorEnabled then
+			return
+		end
+
+		task.delay(0.15, function()
+			if not liveMonitorEnabled or not instance or not instance.Parent then
+				return
+			end
+
+			local interesting, reason = isInteresting(instance)
+
+			if interesting then
+				addEntry(instance, reason, "LIVE")
+				diagnosticStatus.Text =
+					"Live object captured: " ..
+					instance.Name ..
+					" | Total: " ..
+					#diagnosticEntries
+			end
+		end)
+	end)
+
+	diagnosticStatus.Text =
+		"Live monitor active. Waiting for newly spawned objects..."
+end
+
+liveButton.MouseButton1Click:Connect(function()
+	if liveMonitorEnabled then
+		stopLiveMonitor()
+	else
+		startLiveMonitor()
+	end
+end)
+
+-- =========================================================
+-- COPY / CLEAR
+-- =========================================================
+
+copyButton.MouseButton1Click:Connect(function()
+	local exportText = buildExportText()
+
+	if #diagnosticEntries == 0 then
+		diagnosticStatus.Text = "Nothing to copy yet."
+		return
+	end
+
+	local clipboardFunction =
+		setclipboard
+		or toclipboard
+		or (syn and syn.write_clipboard)
+
+	if clipboardFunction then
+		local ok, err = pcall(function()
+			clipboardFunction(exportText)
+		end)
+
+		if ok then
+			diagnosticStatus.Text =
+				"Copied " ..
+				#diagnosticEntries ..
+				" entries. Paste them into ChatGPT."
+		else
+			diagnosticStatus.Text = "Clipboard failed: " .. tostring(err)
+			print(exportText)
+		end
+	else
+		diagnosticStatus.Text =
+			"Clipboard function unavailable. Export printed to console."
+		print(exportText)
+	end
+end)
+
+clearButton.MouseButton1Click:Connect(function()
+	diagnosticEntries = {}
+	diagnosticSeen = {}
+	clearRows()
+	diagnosticStatus.Text = "Diagnostic log cleared."
+end)
+
+-- =========================================================
+-- READY
+-- =========================================================
+
+print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD)
+
 pcall(function()
-    if CoreGui:FindFirstChild("SolsMasterHub") then CoreGui.SolsMasterHub:Destroy() end
-    if LocalPlayer.PlayerGui:FindFirstChild("SolsMasterHub") then LocalPlayer.PlayerGui.SolsMasterHub:Destroy() end
-end)
-
--- Создание GUI с защитой родителя
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SolsMasterHub"
-ScreenGui.ResetOnSpawn = false
-
-local parentSuccess = pcall(function()
-    ScreenGui.Parent = CoreGui
-end)
-if not parentSuccess or not ScreenGui.Parent then
-    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local Main = Instance.new("Frame")
-Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 340)
-Main.Position = UDim2.new(0.02, 0, 0.15, 0)
-Main.BackgroundColor3 = Color3.fromRGB(15, 17, 22)
-Main.BackgroundTransparency = 0.05
-Main.BorderSizePixel = 0
-Main.Active = true
-Main.Draggable = true
-Main.Parent = ScreenGui
-
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
-local MainStroke = Instance.new("UIStroke", Main)
-MainStroke.Color = Color3.fromRGB(45, 52, 68)
-MainStroke.Thickness = 1.2
-
--- Шапка
-local Top = Instance.new("Frame")
-Top.Size = UDim2.new(1, 0, 0, 30)
-Top.BackgroundTransparency = 1
-Top.Parent = Main
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -60, 1, 0)
-Title.Position = UDim2.new(0, 10, 0, 0)
-Title.BackgroundTransparency = 1
-Title.Font = Enum.Font.GothamBold
-Title.Text = "Sol's Master Hub"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 12
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = Top
-
-local MinBtn = Instance.new("TextButton")
-MinBtn.Size = UDim2.new(0, 22, 0, 22)
-MinBtn.Position = UDim2.new(1, -50, 0.5, -11)
-MinBtn.BackgroundColor3 = Color3.fromRGB(30, 34, 46)
-MinBtn.Font = Enum.Font.GothamBold
-MinBtn.Text = "—"
-MinBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-MinBtn.TextSize = 11
-MinBtn.Parent = Top
-Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
-
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 22, 0, 22)
-CloseBtn.Position = UDim2.new(1, -26, 0.5, -11)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.Text = "✕"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.TextSize = 11
-CloseBtn.Parent = Top
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
-
--- Переключатель вкладок
-local TabSwitcher = Instance.new("Frame")
-TabSwitcher.Size = UDim2.new(1, -16, 0, 26)
-TabSwitcher.Position = UDim2.new(0, 8, 0, 32)
-TabSwitcher.BackgroundColor3 = Color3.fromRGB(22, 25, 33)
-TabSwitcher.BorderSizePixel = 0
-TabSwitcher.Parent = Main
-Instance.new("UICorner", TabSwitcher).CornerRadius = UDim.new(0, 6)
-
-local TabRadar = Instance.new("TextButton")
-TabRadar.Size = UDim2.new(0.5, -2, 1, -4)
-TabRadar.Position = UDim2.new(0, 2, 0, 2)
-TabRadar.BackgroundColor3 = Color3.fromRGB(45, 110, 225)
-TabRadar.Font = Enum.Font.GothamBold
-TabRadar.Text = "РАДАР"
-TabRadar.TextColor3 = Color3.fromRGB(255, 255, 255)
-TabRadar.TextSize = 10
-TabRadar.Parent = TabSwitcher
-Instance.new("UICorner", TabRadar).CornerRadius = UDim.new(0, 5)
-
-local TabLog = Instance.new("TextButton")
-TabLog.Size = UDim2.new(0.5, -2, 1, -4)
-TabLog.Position = UDim2.new(0.5, 0, 0, 2)
-TabLog.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
-TabLog.Font = Enum.Font.GothamBold
-TabLog.Text = "ЛОГ / ДАННЫЕ"
-TabLog.TextColor3 = Color3.fromRGB(160, 170, 190)
-TabLog.TextSize = 10
-TabLog.Parent = TabSwitcher
-Instance.new("UICorner", TabLog).CornerRadius = UDim.new(0, 5)
-
--- Контейнер Радара
-local RadarContainer = Instance.new("Frame")
-RadarContainer.Size = UDim2.new(1, 0, 1, -64)
-RadarContainer.Position = UDim2.new(0, 0, 0, 64)
-RadarContainer.BackgroundTransparency = 1
-RadarContainer.Parent = Main
-
-local SpeedBox = Instance.new("Frame")
-SpeedBox.Size = UDim2.new(1, -16, 0, 24)
-SpeedBox.Position = UDim2.new(0, 8, 0, 0)
-SpeedBox.BackgroundColor3 = Color3.fromRGB(22, 25, 33)
-SpeedBox.BorderSizePixel = 0
-SpeedBox.Parent = RadarContainer
-Instance.new("UICorner", SpeedBox).CornerRadius = UDim.new(0, 6)
-
-local SpeedMinus = Instance.new("TextButton")
-SpeedMinus.Size = UDim2.new(0, 26, 1, 0)
-SpeedMinus.BackgroundColor3 = Color3.fromRGB(35, 40, 52)
-SpeedMinus.Font = Enum.Font.GothamBold
-SpeedMinus.Text = "-1"
-SpeedMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
-SpeedMinus.TextSize = 10
-SpeedMinus.Parent = SpeedBox
-Instance.new("UICorner", SpeedMinus).CornerRadius = UDim.new(0, 6)
-
-local SpeedPlus = Instance.new("TextButton")
-SpeedPlus.Size = UDim2.new(0, 26, 1, 0)
-SpeedPlus.Position = UDim2.new(1, -26, 0, 0)
-SpeedPlus.BackgroundColor3 = Color3.fromRGB(35, 40, 52)
-SpeedPlus.Font = Enum.Font.GothamBold
-SpeedPlus.Text = "+1"
-SpeedPlus.TextColor3 = Color3.fromRGB(255, 255, 255)
-SpeedPlus.TextSize = 10
-SpeedPlus.Parent = SpeedBox
-Instance.new("UICorner", SpeedPlus).CornerRadius = UDim.new(0, 6)
-
-local SpeedLabel = Instance.new("TextLabel")
-SpeedLabel.Size = UDim2.new(1, -60, 1, 0)
-SpeedLabel.Position = UDim2.new(0, 30, 0, 0)
-SpeedLabel.BackgroundTransparency = 1
-SpeedLabel.Font = Enum.Font.GothamBold
-SpeedLabel.Text = "Скорость: 16"
-SpeedLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
-SpeedLabel.TextSize = 10
-SpeedLabel.Parent = SpeedBox
-
-local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, -16, 0, 16)
-Status.Position = UDim2.new(0, 8, 0, 26)
-Status.BackgroundTransparency = 1
-Status.Font = Enum.Font.Gotham
-Status.Text = "Поиск материалов..."
-Status.TextColor3 = Color3.fromRGB(140, 155, 175)
-Status.TextSize = 10
-Status.TextXAlignment = Enum.TextXAlignment.Left
-Status.Parent = RadarContainer
-
-local Scroll = Instance.new("ScrollingFrame")
-Scroll.Size = UDim2.new(1, -16, 0, 185)
-Scroll.Position = UDim2.new(0, 8, 0, 44)
-Scroll.BackgroundColor3 = Color3.fromRGB(11, 13, 17)
-Scroll.BackgroundTransparency = 0.3
-Scroll.BorderSizePixel = 0
-Scroll.ScrollBarThickness = 2
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-Scroll.Parent = RadarContainer
-
-local ScrollLayout = Instance.new("UIListLayout", Scroll)
-ScrollLayout.Padding = UDim.new(0, 4)
-
-local RadarControl = Instance.new("Frame")
-RadarControl.Size = UDim2.new(1, -16, 0, 28)
-RadarControl.Position = UDim2.new(0, 8, 1, -34)
-RadarControl.BackgroundTransparency = 1
-RadarControl.Parent = RadarContainer
-
-local Refresh = Instance.new("TextButton")
-Refresh.Size = UDim2.new(0.6, -2, 1, 0)
-Refresh.BackgroundColor3 = Color3.fromRGB(45, 110, 225)
-Refresh.Font = Enum.Font.GothamBold
-Refresh.Text = "ОБНОВИТЬ"
-Refresh.TextColor3 = Color3.fromRGB(255, 255, 255)
-Refresh.TextSize = 10
-Refresh.Parent = RadarControl
-Instance.new("UICorner", Refresh).CornerRadius = UDim.new(0, 6)
-
-local StopBtn = Instance.new("TextButton")
-StopBtn.Size = UDim2.new(0.4, -2, 1, 0)
-StopBtn.Position = UDim2.new(0.6, 2, 0, 0)
-StopBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-StopBtn.Font = Enum.Font.GothamBold
-StopBtn.Text = "СТОП"
-StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-StopBtn.TextSize = 10
-StopBtn.Parent = RadarControl
-Instance.new("UICorner", StopBtn).CornerRadius = UDim.new(0, 6)
-
--- Контейнер Лога
-local LogContainer = Instance.new("Frame")
-LogContainer.Size = UDim2.new(1, 0, 1, -64)
-LogContainer.Position = UDim2.new(0, 0, 0, 64)
-LogContainer.BackgroundTransparency = 1
-LogContainer.Visible = false
-LogContainer.Parent = Main
-
-local LogScroll = Instance.new("ScrollingFrame")
-LogScroll.Size = UDim2.new(1, -16, 0, 225)
-LogScroll.Position = UDim2.new(0, 8, 0, 0)
-LogScroll.BackgroundColor3 = Color3.fromRGB(10, 12, 16)
-LogScroll.BorderSizePixel = 0
-LogScroll.ScrollBarThickness = 3
-LogScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-LogScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-LogScroll.Parent = LogContainer
-Instance.new("UICorner", LogScroll).CornerRadius = UDim.new(0, 6)
-
-local LogBox = Instance.new("TextBox")
-LogBox.Size = UDim2.new(1, -8, 1, 0)
-LogBox.Position = UDim2.new(0, 4, 0, 4)
-LogBox.BackgroundTransparency = 1
-LogBox.Font = Enum.Font.Code
-LogBox.TextColor3 = Color3.fromRGB(180, 225, 255)
-LogBox.TextSize = 9
-LogBox.TextXAlignment = Enum.TextXAlignment.Left
-LogBox.TextYAlignment = Enum.TextYAlignment.Top
-LogBox.ClearTextOnFocus = false
-LogBox.MultiLine = true
-LogBox.TextEditable = false
-LogBox.Text = "=== ЖУРНАЛ МАТЕРИАЛОВ ===\n"
-LogBox.Parent = LogScroll
-
-local LogControl = Instance.new("Frame")
-LogControl.Size = UDim2.new(1, -16, 0, 28)
-LogControl.Position = UDim2.new(0, 8, 1, -34)
-LogControl.BackgroundTransparency = 1
-LogControl.Parent = LogContainer
-
-local ClearLogBtn = Instance.new("TextButton")
-ClearLogBtn.Size = UDim2.new(0.35, -2, 1, 0)
-ClearLogBtn.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-ClearLogBtn.Font = Enum.Font.GothamBold
-ClearLogBtn.Text = "ОЧИСТИТЬ"
-ClearLogBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-ClearLogBtn.TextSize = 10
-ClearLogBtn.Parent = LogControl
-Instance.new("UICorner", ClearLogBtn).CornerRadius = UDim.new(0, 6)
-
-local CopyLogBtn = Instance.new("TextButton")
-CopyLogBtn.Size = UDim2.new(0.65, -2, 1, 0)
-CopyLogBtn.Position = UDim2.new(0.35, 2, 0, 0)
-CopyLogBtn.BackgroundColor3 = Color3.fromRGB(35, 140, 85)
-CopyLogBtn.Font = Enum.Font.GothamBold
-CopyLogBtn.Text = "СКОПИРОВАТЬ"
-CopyLogBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CopyLogBtn.TextSize = 10
-CopyLogBtn.Parent = LogControl
-Instance.new("UICorner", CopyLogBtn).CornerRadius = UDim.new(0, 6)
-
-TabRadar.MouseButton1Click:Connect(function()
-    TabRadar.BackgroundColor3 = Color3.fromRGB(45, 110, 225)
-    TabRadar.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TabLog.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
-    TabLog.TextColor3 = Color3.fromRGB(160, 170, 190)
-    RadarContainer.Visible = true
-    LogContainer.Visible = false
-end)
-
-TabLog.MouseButton1Click:Connect(function()
-    TabLog.BackgroundColor3 = Color3.fromRGB(45, 110, 225)
-    TabLog.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TabRadar.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
-    TabRadar.TextColor3 = Color3.fromRGB(160, 170, 190)
-    LogContainer.Visible = true
-    RadarContainer.Visible = false
-end)
-
-local function WriteLog(text)
-    table.insert(LogHistory, text)
-    if #LogHistory > 100 then table.remove(LogHistory, 1) end
-    LogBox.Text = table.concat(LogHistory, "\n")
-    LogScroll.CanvasPosition = Vector3.new(0, 99999, 0)
-end
-
-ClearLogBtn.MouseButton1Click:Connect(function()
-    LogHistory = {"=== ЛОГ ОЧИЩЕН ==="}
-    LogBox.Text = LogHistory[1]
-end)
-
-CopyLogBtn.MouseButton1Click:Connect(function()
-    pcall(function()
-        if setclipboard then
-            setclipboard(LogBox.Text)
-            CopyLogBtn.Text = "СКОПИРОВАНО!"
-            task.wait(1.5)
-            CopyLogBtn.Text = "СКОПИРОВАТЬ"
-        end
-    end)
-end)
-
-local function SetSpeed(val)
-    CurrentWalkSpeed = math.clamp(val, 16, 120)
-    local char = LocalPlayer.Character
-    local human = char and char:FindFirstChildWhichIsA("Humanoid")
-    if human then human.WalkSpeed = CurrentWalkSpeed end
-    SpeedLabel.Text = "Скорость: " .. tostring(CurrentWalkSpeed)
-end
-SpeedMinus.MouseButton1Click:Connect(function() SetSpeed(CurrentWalkSpeed - 1) end)
-SpeedPlus.MouseButton1Click:Connect(function() SetSpeed(CurrentWalkSpeed + 1) end)
-
-local function ClearAll()
-    for _, esp in pairs(ActiveESP) do
-        pcall(function()
-            if esp.Highlight then esp.Highlight:Destroy() end
-            if esp.Billboard then esp.Billboard:Destroy() end
-        end)
-    end
-    for _, tr in pairs(ActiveTracers) do
-        pcall(function()
-            if tr.Beam then tr.Beam:Destroy() end
-            if tr.Att0 then tr.Att0:Destroy() end
-            if tr.Att1 then tr.Att1:Destroy() end
-        end)
-    end
-    ActiveESP = {}
-    ActiveTracers = {}
-end
-
-local function StopNavigation()
-    IsNavigating = false
-    if CurrentNavThread then
-        pcall(function() task.cancel(CurrentNavThread) end)
-        CurrentNavThread = nil
-    end
-    local char = LocalPlayer.Character
-    local human = char and char:FindFirstChildWhichIsA("Humanoid")
-    if human and char:FindFirstChild("HumanoidRootPart") then
-        pcall(function() human:MoveTo(char.HumanoidRootPart.Position) end)
-    end
-end
-StopBtn.MouseButton1Click:Connect(StopNavigation)
-
-local function Unload()
-    IsRunning = false
-    StopNavigation()
-    if RenderConn then pcall(function() RenderConn:Disconnect() end) end
-    ClearAll()
-    pcall(function() ScreenGui:Destroy() end)
-end
-CloseBtn.MouseButton1Click:Connect(Unload)
-
-local mini = false
-MinBtn.MouseButton1Click:Connect(function()
-    mini = not mini
-    if mini then
-        Main.Size = UDim2.new(0, 260, 0, 30)
-        TabSwitcher.Visible = false
-        RadarContainer.Visible = false
-        LogContainer.Visible = false
-        MinBtn.Text = "+"
-    else
-        Main.Size = UDim2.new(0, 260, 0, 340)
-        TabSwitcher.Visible = true
-        RadarContainer.Visible = TabRadar.TextColor3 == Color3.fromRGB(255, 255, 255)
-        LogContainer.Visible = not RadarContainer.Visible
-        MinBtn.Text = "—"
-    end
-end)
-
-local function DrawTracer(part, color)
-    pcall(function()
-        local char = LocalPlayer.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not root or not part then return end
-
-        local a0 = Instance.new("Attachment", root)
-        local a1 = Instance.new("Attachment", part)
-
-        local beam = Instance.new("Beam")
-        beam.Attachment0 = a0
-        beam.Attachment1 = a1
-        beam.Color = ColorSequence.new(color)
-        beam.Width0 = 0.15
-        beam.Width1 = 0.15
-        beam.FaceCamera = true
-        beam.Segments = 6
-        beam.Transparency = NumberSequence.new(0.3)
-        beam.Parent = Workspace.Terrain
-
-        table.insert(ActiveTracers, {Beam = beam, Att0 = a0, Att1 = a1})
-    end)
-end
-
-local function DrawESP(part, labelName, color)
-    pcall(function()
-        local hl = Instance.new("Highlight")
-        hl.Adornee = part.Parent:IsA("Model") and part.Parent or part
-        hl.FillColor = color
-        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-        hl.FillTransparency = 0.35
-        hl.Parent = ScreenGui
-
-        local bg = Instance.new("BillboardGui")
-        bg.Adornee = part
-        bg.Size = UDim2.new(0, 130, 0, 28)
-        bg.StudsOffset = Vector3.new(0, 2, 0)
-        bg.AlwaysOnTop = true
-        bg.Parent = ScreenGui
-
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, 0, 1, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Font = Enum.Font.GothamBold
-        lbl.TextColor3 = color
-        lbl.TextStrokeTransparency = 0
-        lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        lbl.TextSize = 10
-        lbl.Text = labelName
-        lbl.Parent = bg
-
-        table.insert(ActiveESP, {Highlight = hl, Billboard = bg, Label = lbl, Part = part, Name = labelName})
-        DrawTracer(part, color)
-    end)
-end
-
-local function DeepIdentify(model, prompt)
-    local fullText = string.lower(model.Name .. " " .. prompt.ObjectText .. " " .. prompt.ActionText)
-    if model.Parent then fullText = fullText .. " " .. string.lower(model.Parent.Name) end
-
-    if fullText:find("potion") or fullText:find("coin") or fullText:find("gold") or fullText:find("bank") or fullText:find("quest") then
-        return nil, nil
-    end
-
-    for key, data in pairs(MaterialDatabase) do
-        if fullText:find(key) then
-            return data.Name, data.Color
-        end
-    end
-
-    for _, ch in pairs(model:GetDescendants()) do
-        local chName = string.lower(ch.Name)
-        for key, data in pairs(MaterialDatabase) do
-            if chName:find(key) then return data.Name, data.Color end
-        end
-
-        if ch:IsA("PointLight") or ch:IsA("SurfaceLight") then
-            local c = ch.Color
-            if c.R > 0.8 and c.G < 0.3 then return "Eternal Flame", Color3.fromRGB(255, 69, 0) end
-            if c.R > 0.8 and c.G > 0.7 then return "Piece of Star", Color3.fromRGB(255, 215, 0) end
-            if c.R > 0.4 and c.B > 0.6 then return "Curruptaine", Color3.fromRGB(148, 0, 211) end
-            if c.B > 0.8 and c.G > 0.6 then return "Wind Essence", Color3.fromRGB(135, 206, 235) end
-        end
-
-        if ch:IsA("ParticleEmitter") then
-            local pName = string.lower(ch.Name .. " " .. ch.Texture)
-            if pName:find("star") then return "Piece of Star", Color3.fromRGB(255, 215, 0) end
-            if pName:find("fire") or pName:find("flame") then return "Eternal Flame", Color3.fromRGB(255, 69, 0) end
-            if pName:find("void") or pName:find("dark") then return "NULL?", Color3.fromRGB(160, 32, 240) end
-        end
-    end
-
-    if prompt.ActionText:lower():find("pick up") or prompt.ActionText:lower():find("pickup") then
-        return "Неизвестный Ресурс", Color3.fromRGB(255, 215, 0)
-    end
-
-    return nil, nil
-end
-
-local function HasSolidGround(fromPos, toPos, char)
-    local dir = (toPos - fromPos).Unit
-    local checkPos = fromPos + (dir * 3.0) + Vector3.new(0, 1.5, 0)
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {char, ScreenGui}
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-    local hit = Workspace:Raycast(checkPos, Vector3.new(0, -22, 0), rayParams)
-    return hit ~= nil
-end
-
-local function NeedsJump(char, root)
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {char}
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-    local lookDir = root.CFrame.LookVector * 2.8
-    local lowHit = Workspace:Raycast(root.Position - Vector3.new(0, 0.8, 0), lookDir, rayParams)
-    local highHit = Workspace:Raycast(root.Position + Vector3.new(0, 2.2, 0), lookDir, rayParams)
-
-    return lowHit ~= nil and highHit == nil
-end
-
-local function SmartNavigate(targetPart, itemName)
-    StopNavigation()
-
-    CurrentNavThread = task.spawn(function()
-        IsNavigating = true
-        local char = LocalPlayer.Character
-        local human = char and char:FindFirstChildWhichIsA("Humanoid")
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not char or not human or not root or not targetPart then return end
-
-        human.WalkSpeed = CurrentWalkSpeed
-        WriteLog(string.format("🚀 [МАРШРУТ] Иду к: %s", itemName))
-
-        local path = PathfindingService:CreatePath({
-            AgentRadius = 2.4,
-            AgentHeight = 5.0,
-            AgentCanJump = true,
-            AgentJumpHeight = 14,
-            AgentMaxSlope = 60,
-            WaypointSpacing = 2.8
-        })
-
-        local success = pcall(function()
-            path:ComputeAsync(root.Position, targetPart.Position)
-        end)
-
-        if not success or path.Status ~= Enum.PathStatus.Success then
-            Status.Text = "Прямой путь..."
-            pcall(function() human:MoveTo(targetPart.Position) end)
-            IsNavigating = false
-            return
-        end
-
-        local waypoints = path:GetWaypoints()
-        for i, waypoint in ipairs(waypoints) do
-            if not IsNavigating or not char.Parent or human.Health <= 0 then break end
-
-            local wpPos = waypoint.Position
-
-            if not HasSolidGround(root.Position, wpPos, char) and (wpPos.Y <= root.Position.Y) then
-                if (root.Position - wpPos).Magnitude < 11 then
-                    human.Jump = true
-                else
-                    Status.Text = "Обрыв!"
-                    break
-                end
-            end
-
-            if waypoint.Action == Enum.PathWaypointAction.Jump or (wpPos.Y > root.Position.Y + 1.2) then
-                human.Jump = true
-            end
-
-            pcall(function() human:MoveTo(wpPos) end)
-
-            local reached = false
-            local lastPos = root.Position
-            local stuckCount = 0
-
-            while not reached and IsNavigating do
-                task.wait(0.04)
-
-                if NeedsJump(char, root) then
-                    human.Jump = true
-                end
-
-                local hDist = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(wpPos.X, 0, wpPos.Z)).Magnitude
-                if hDist < 3.2 and math.abs(root.Position.Y - wpPos.Y) < 5.5 then
-                    reached = true
-                    break
-                end
-
-                if (root.Position - lastPos).Magnitude < 0.25 then
-                    stuckCount = stuckCount + 1
-                    if stuckCount > 8 then
-                        human.Jump = true
-                        pcall(function() human:MoveTo(wpPos + Vector3.new(math.random(-2, 2), 0, math.random(-2, 2))) end)
-                        stuckCount = 0
-                    end
-                else
-                    stuckCount = 0
-                    lastPos = root.Position
-                end
-            end
-        end
-
-        pcall(function() human:MoveTo(root.Position) end)
-        IsNavigating = false
-        Status.Text = "На месте!"
-        WriteLog(string.format("✅ [ПРИБЫЛ] %s", itemName))
-    end)
-end
-
-RenderConn = RunService.RenderStepped:Connect(function()
-    if not IsRunning then return end
-    pcall(function()
-        local char = LocalPlayer.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-
-        for _, esp in pairs(ActiveESP) do
-            if esp.Part and esp.Part.Parent then
-                local dist = math.floor((root.Position - esp.Part.Position).Magnitude)
-                esp.Label.Text = string.format("%s [%dм]", esp.Name, dist)
-            end
-        end
-    end)
-end)
-
-local function Scan()
-    if not IsRunning then return end
-    ClearAll()
-    pcall(function()
-        for _, c in pairs(Scroll:GetChildren()) do
-            if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
-        end
-    end)
-
-    local found = {}
-    local processed = {}
-
-    pcall(function()
-        for _, prompt in pairs(Workspace:GetDescendants()) do
-            if prompt:IsA("ProximityPrompt") and prompt.Enabled then
-                local model = prompt.Parent
-                if model and not model:IsDescendantOf(LocalPlayer.Character) then
-                    local gParent = model.Parent and model.Parent.Name or ""
-                    if gParent == "Map" or gParent == "SpawnedItems" or gParent == "Workspace" then
-                        local targetPart = model:IsA("BasePart") and model or model:FindFirstChildWhichIsA("BasePart")
-                        if targetPart and not processed[targetPart] then
-                            local name, color = DeepIdentify(model, prompt)
-                            if name then
-                                processed[targetPart] = true
-                                table.insert(found, {Name = name, Color = color, Part = targetPart, Model = model})
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    if not IsNavigating then
-        Status.Text = "Материалов: " .. tostring(#found)
-    end
-
-    if #found == 0 then
-        pcall(function()
-            local empty = Instance.new("TextLabel")
-            empty.Size = UDim2.new(1, 0, 0, 40)
-            empty.BackgroundTransparency = 1
-            empty.Font = Enum.Font.Gotham
-            empty.Text = "Материалов нет.\nЖди спавна биома."
-            empty.TextColor3 = Color3.fromRGB(110, 120, 140)
-            empty.TextSize = 10
-            empty.Parent = Scroll
-        end)
-        return
-    end
-
-    for _, item in pairs(found) do
-        DrawESP(item.Part, item.Name, item.Color)
-
-        pcall(function()
-            local row = Instance.new("Frame")
-            row.Size = UDim2.new(1, 0, 0, 32)
-            row.BackgroundColor3 = Color3.fromRGB(24, 26, 32)
-            row.BorderSizePixel = 0
-            row.Parent = Scroll
-            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
-
-            local tag = Instance.new("Frame")
-            tag.Size = UDim2.new(0, 3, 1, -8)
-            tag.Position = UDim2.new(0, 5, 0, 4)
-            tag.BackgroundColor3 = item.Color
-            tag.BorderSizePixel = 0
-            tag.Parent = row
-
-            local nameLbl = Instance.new("TextLabel")
-            nameLbl.Size = UDim2.new(0.6, 0, 1, 0)
-            nameLbl.Position = UDim2.new(0, 14, 0, 0)
-            nameLbl.BackgroundTransparency = 1
-            nameLbl.Font = Enum.Font.GothamBold
-            nameLbl.Text = item.Name
-            nameLbl.TextColor3 = Color3.fromRGB(235, 235, 235)
-            nameLbl.TextSize = 10
-            nameLbl.TextXAlignment = Enum.TextXAlignment.Left
-            nameLbl.Parent = row
-
-            local goBtn = Instance.new("TextButton")
-            goBtn.Size = UDim2.new(0, 46, 0, 22)
-            goBtn.Position = UDim2.new(1, -51, 0.5, -11)
-            goBtn.BackgroundColor3 = Color3.fromRGB(40, 145, 80)
-            goBtn.Font = Enum.Font.GothamBold
-            goBtn.Text = "ИДТИ"
-            goBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            goBtn.TextSize = 9
-            goBtn.Parent = row
-            Instance.new("UICorner", goBtn).CornerRadius = UDim.new(0, 4)
-
-            goBtn.MouseButton1Click:Connect(function()
-                Status.Text = "Иду к: " .. item.Name
-                SmartNavigate(item.Part, item.Name)
-            end)
-        end)
-    end
-end
-
-Refresh.MouseButton1Click:Connect(Scan)
-
-pcall(function()
-    Workspace.DescendantAdded:Connect(function(desc)
-        if desc:IsA("ProximityPrompt") then
-            task.wait(0.1)
-            local model = desc.Parent
-            if model and not model:IsDescendantOf(LocalPlayer.Character) then
-                local name, _ = DeepIdentify(model, desc)
-                if name then
-                    WriteLog(string.format("✨ [СПАВН] %s", name))
-                    if not IsNavigating then Scan() end
-                end
-            end
-        end
-    end)
-end)
-
-Scan()
-task.spawn(function()
-    while IsRunning do
-        task.wait(5)
-        if IsRunning and not IsNavigating then
-            Scan()
-        end
-    end
+	StarterGui:SetCore("SendNotification", {
+		Title = "Sols Scanner " .. VERSION,
+		Text = BUILD .. " loaded — Null item fixed + Navigation AI",
+		Duration = 5
+	})
 end)
