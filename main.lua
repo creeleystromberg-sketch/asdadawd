@@ -1,5 +1,5 @@
 -- Sol's RNG Material Scanner & Navigator
--- Version: v0.8.0 | Enhanced Pathfinding & Smart Jump
+-- Version: v0.8.1 | Fixed Jump Physics & Strict Biome Mappings
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -12,8 +12,8 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local GUI_NAME = "SolsMaterialScanner"
-local VERSION = "v0.8.0"
-local BUILD = "BUILD-014"
+local VERSION = "v0.8.1"
+local BUILD = "BUILD-015"
 
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then
@@ -55,7 +55,7 @@ local KEYWORDS = {
 }
 
 -- =========================================================
--- ITEM BASE / MAPPINGS
+-- MATERIAL & BIOME MAPPINGS
 -- =========================================================
 
 local MATERIAL_INFO = {
@@ -63,18 +63,11 @@ local MATERIAL_INFO = {
 	["Icicle"] = "Snowy",
 	["Rainy Bottle"] = "Rainy",
 	["Hour Glass"] = "Sandstorm",
-	["Hourglass"] = "Sandstorm",
 	["Eternal Flame"] = "Hell",
 	["Piece of Star"] = "Starfall",
-	["Star Piece"] = "Starfall",
 	["Feather Vial"] = "Heaven",
 	["Curruptaine"] = "Corruption",
-	["Corruptaine"] = "Corruption",
 	["NULL?"] = "Null",
-	["Null"] = "Null",
-	["NULL"] = "Null",
-	["Null?"] = "Null",
-	["Null Item"] = "Null",
 }
 
 local function lowered(value)
@@ -92,12 +85,6 @@ local function getMaterialBiome(rawName)
 
 	local low = lowered(rawName)
 
-	for name, biome in pairs(MATERIAL_INFO) do
-		if lowered(name) == low then
-			return biome, name
-		end
-	end
-
 	if string.find(low, "null", 1, true) or string.find(low, "void", 1, true) then
 		return "Null", "NULL?"
 	elseif string.find(low, "wind", 1, true) then
@@ -106,16 +93,22 @@ local function getMaterialBiome(rawName)
 		return "Rainy", "Rainy Bottle"
 	elseif string.find(low, "sand", 1, true) or string.find(low, "hour", 1, true) then
 		return "Sandstorm", "Hour Glass"
-	elseif string.find(low, "flame", 1, true) or string.find(low, "hell", 1, true) or string.find(low, "fire", 1, true) then
+	elseif string.find(low, "flame", 1, true) or string.find(low, "hell", 1, true) or string.find(low, "fire", 1, true) or string.find(low, "eternal", 1, true) then
 		return "Hell", "Eternal Flame"
 	elseif string.find(low, "star", 1, true) then
 		return "Starfall", "Piece of Star"
-	elseif string.find(low, "feather", 1, true) or string.find(low, "heaven", 1, true) then
+	elseif string.find(low, "feather", 1, true) or string.find(low, "heaven", 1, true) or string.find(low, "vial", 1, true) then
 		return "Heaven", "Feather Vial"
 	elseif string.find(low, "corrupt", 1, true) then
 		return "Corruption", "Curruptaine"
 	elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) then
 		return "Snowy", "Icicle"
+	end
+
+	for name, biome in pairs(MATERIAL_INFO) do
+		if lowered(name) == low then
+			return biome, name
+		end
 	end
 
 	return "Special / Other", rawName
@@ -126,7 +119,7 @@ local selectedMaterialName = nil
 local materialRows = {}
 
 -- =========================================================
--- UI HELPERS & SETUP
+-- UI HELPERS
 -- =========================================================
 
 local function uiCorner(parent, radius)
@@ -291,8 +284,7 @@ local function pageTitle(page, text, subtitle)
 	s.Parent = page
 end
 
--- Materials Page
-pageTitle(materialsPage, "Materials", "Materials detected in real-time in the current server.")
+pageTitle(materialsPage, "Materials", "Only materials currently detected by the tracker appear here.")
 
 local materialList = Instance.new("ScrollingFrame")
 materialList.Size = UDim2.new(1, 0, 1, -72)
@@ -326,8 +318,7 @@ emptyMaterials.TextSize = 12
 emptyMaterials.Font = Enum.Font.Gotham
 emptyMaterials.Parent = materialList
 
--- Tracker Page
-pageTitle(trackerPage, "Tracker & AI", "Visual beam tracking and pathfinding navigation.")
+pageTitle(trackerPage, "Tracker & AI", "Visual beams and natural pathfinding navigation.")
 
 local trackButton = Instance.new("TextButton")
 trackButton.Size = UDim2.fromOffset(170, 36)
@@ -398,7 +389,6 @@ stopNavigationButton.MouseButton1Click:Connect(function()
 	end
 end)
 
--- Player Page
 pageTitle(playerPage, "Player", "Local movement and speed adjustments.")
 
 local speedCard = Instance.new("Frame")
@@ -459,15 +449,14 @@ local speedHint = Instance.new("TextLabel")
 speedHint.Size = UDim2.new(1, -180, 0, 20)
 speedHint.Position = UDim2.fromOffset(12, 39)
 speedHint.BackgroundTransparency = 1
-speedHint.Text = "Adjusts WalkSpeed smoothly"
+speedHint.Text = "Changes by exactly 1"
 speedHint.TextColor3 = Color3.fromRGB(114, 119, 130)
 speedHint.TextSize = 10
 speedHint.Font = Enum.Font.Gotham
 speedHint.TextXAlignment = Enum.TextXAlignment.Left
 speedHint.Parent = speedCard
 
--- Server Page
-pageTitle(serverPage, "Private Server", "Teleport directly via Join Guard, link, or JobId.")
+pageTitle(serverPage, "Private Server", "Paste a private server link or a server instance id.")
 
 local serverInput = Instance.new("TextBox")
 serverInput.Size = UDim2.new(1, 0, 0, 38)
@@ -510,8 +499,7 @@ serverStatus.TextXAlignment = Enum.TextXAlignment.Left
 serverStatus.TextYAlignment = Enum.TextYAlignment.Center
 serverStatus.Parent = serverPage
 
--- Diagnostic Page
-pageTitle(diagnosticPage, "Diagnostic", "Inspect workspace objects and prompt structures.")
+pageTitle(diagnosticPage, "Diagnostic", "Keep the existing scanner available while we build the navigation system.")
 
 local buttonRow = Instance.new("Frame")
 buttonRow.Size = UDim2.new(1, 0, 0, 34)
@@ -573,7 +561,6 @@ resultsLayout.Padding = UDim.new(0, 5)
 resultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 resultsLayout.Parent = resultsFrame
 
--- Minimized floating toggle
 local miniButton = Instance.new("TextButton")
 miniButton.Size = UDim2.fromOffset(44, 44)
 miniButton.Position = UDim2.new(0.5, -22, 0.5, -22)
@@ -589,8 +576,6 @@ miniButton.Draggable = true
 miniButton.Parent = gui
 uiCorner(miniButton, 9)
 uiStroke(miniButton, 0.32)
-
-local currentPage = nil
 
 local function showPage(name, button)
 	for pageName, page in pairs(pages) do
@@ -610,7 +595,6 @@ local function showPage(name, button)
 
 	button.BackgroundColor3 = Color3.fromRGB(34, 37, 44)
 	button.TextColor3 = Color3.fromRGB(241, 242, 245)
-	currentPage = name
 end
 
 materialsTabButton.MouseButton1Click:Connect(function() showPage("Materials", materialsTabButton) end)
@@ -690,7 +674,7 @@ end)
 refreshSpeedValue()
 
 -- =========================================================
--- UTILITY / CLIPBOARD / SERVER JOIN
+-- UTILITY / SERVER JOIN
 -- =========================================================
 
 local function getExternalUrlOpener()
@@ -1045,13 +1029,15 @@ local function getAllPickupEntries()
 end
 
 -- =========================================================
--- ADVANCED NAVIGATION & SMART JUMP AI
+-- CLEAN NAVIGATION & GROUNDED JUMP LOGIC
 -- =========================================================
 
 local NAV_MAX_REPATHS = 8
 local NAV_WAYPOINT_TIMEOUT = 3.5
 local NAV_STUCK_TIME = 1.0
 local NAV_REACH_DISTANCE = 3.8
+local JUMP_COOLDOWN = 0.8
+local lastJumpTime = 0
 
 local function setNavigationStatus(line1, line2, line3)
 	local lines = { line1 }
@@ -1073,17 +1059,21 @@ local function navigationCharacter()
 	return character, humanoid, root
 end
 
--- Guaranteed jump execution via state change
-local function forceJump(humanoid)
+-- Only jumps if on the ground and cooldown has elapsed
+local function tryGroundedJump(humanoid)
 	if not humanoid or humanoid.Health <= 0 then return end
+	local now = os.clock()
+	if now - lastJumpTime < JUMP_COOLDOWN then return end
+	if humanoid.FloorMaterial == Enum.Material.Air then return end
+
+	lastJumpTime = now
 	humanoid.Jump = true
-	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 end
 
--- Raycast ahead to detect obstacles directly in front of character
+-- Raycast in front to detect obstacles without mid-air floating
 local function isObstacleAhead(root, targetPosition, character)
-	local origin = root.Position
-	local direction = (targetPosition - origin).Unit * 3.2
+	local origin = root.Position - Vector3.new(0, 1.2, 0)
+	local direction = (Vector3.new(targetPosition.X, origin.Y, targetPosition.Z) - origin).Unit * 2.8
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -1125,7 +1115,6 @@ local function waitForWaypoint(token, humanoid, root, destination, isJump)
 	local started = os.clock()
 	local lastMovementTime = os.clock()
 	local lastPosition = root.Position
-	local jumpAttempted = false
 
 	while os.clock() - started < NAV_WAYPOINT_TIMEOUT do
 		if token ~= navigationToken or not navigationRunning then
@@ -1140,9 +1129,8 @@ local function waitForWaypoint(token, humanoid, root, destination, isJump)
 		local distance = (currentPos - destination).Magnitude
 		local deltaY = destination.Y - currentPos.Y
 
-		-- Smart dynamic jump on elevation difference or obstacle
-		if isJump or deltaY > 1.2 or isObstacleAhead(root, destination, player.Character) then
-			forceJump(humanoid)
+		if isJump or deltaY > 1.4 or isObstacleAhead(root, destination, player.Character) then
+			tryGroundedJump(humanoid)
 		end
 
 		if distance <= NAV_REACH_DISTANCE then
@@ -1153,33 +1141,22 @@ local function waitForWaypoint(token, humanoid, root, destination, isJump)
 		if moved >= 0.7 then
 			lastPosition = currentPos
 			lastMovementTime = os.clock()
-			jumpAttempted = false
 		elseif os.clock() - lastMovementTime >= NAV_STUCK_TIME then
-			-- Unstuck routine
-			if not jumpAttempted then
-				forceJump(humanoid)
-				jumpAttempted = true
-				lastMovementTime = os.clock()
-			else
-				-- Lateral unjam step
-				humanoid:Move(Vector3.new(math.random(-1, 1), 0, math.random(-1, 1)).Unit)
-				forceJump(humanoid)
-				return false, "stuck"
-			end
+			tryGroundedJump(humanoid)
+			lastMovementTime = os.clock()
 		end
 
-		task.wait(0.05)
+		task.wait(0.06)
 	end
 
 	return false, "waypoint timeout"
 end
 
--- Fallback smart direct runner when PathfindingService fails on tricky terrain
 local function directApproachSmart(token, entry, humanoid, root)
 	if not entry.part or not entry.part.Parent then return false, "Target gone." end
 
 	local started = os.clock()
-	while os.clock() - started < 12 do
+	while os.clock() - started < 10 do
 		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
 		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then return false, "dead" end
 
@@ -1192,8 +1169,8 @@ local function directApproachSmart(token, entry, humanoid, root)
 
 		humanoid:MoveTo(targetPos)
 
-		if (targetPos.Y - root.Position.Y) > 1.2 or isObstacleAhead(root, targetPos, player.Character) then
-			forceJump(humanoid)
+		if (targetPos.Y - root.Position.Y) > 1.4 or isObstacleAhead(root, targetPos, player.Character) then
+			tryGroundedJump(humanoid)
 		end
 
 		task.wait(0.08)
@@ -1212,8 +1189,8 @@ local function followComputedPath(token, entry, humanoid, root)
 		AgentHeight = 5.0,
 		AgentCanJump = true,
 		AgentCanClimb = true,
-		AgentJumpHeight = 10.0,
-		AgentMaxSlope = 55.0,
+		AgentJumpHeight = 7.0,
+		AgentMaxSlope = 50.0,
 		WaypointSpacing = 3.5,
 	})
 
@@ -1222,8 +1199,6 @@ local function followComputedPath(token, entry, humanoid, root)
 	end)
 
 	if not ok or path.Status ~= Enum.PathStatus.Success then
-		-- Fallback to Smart Direct Navigation
-		setNavigationStatus("AI: Pathfinding complex", "Using direct obstacle navigation...")
 		return directApproachSmart(token, entry, humanoid, root)
 	end
 
@@ -1244,7 +1219,6 @@ local function followComputedPath(token, entry, humanoid, root)
 		local waypoint = waypoints[index]
 		local isJumpAction = (waypoint.Action == Enum.PathWaypointAction.Jump)
 
-		-- Only check ground safety if NOT mid-air jump
 		if not isJumpAction and not safeGroundAt(waypoint.Position, player.Character) then
 			return false, "Recalculating over void"
 		end
@@ -1341,13 +1315,13 @@ startNavigation = function(entry)
 					task.wait(0.35)
 					if not entry.model.Parent then
 						navigationRunning = false
-						setNavigationStatus("AI: complete", entry.name .. " collected successfully!")
+						setNavigationStatus("AI: complete", entry.name .. " collected.")
 						return
 					end
 					task.wait(0.5)
 					if not entry.model.Parent then
 						navigationRunning = false
-						setNavigationStatus("AI: complete", entry.name .. " collected successfully!")
+						setNavigationStatus("AI: complete", entry.name .. " collected.")
 						return
 					end
 				else
@@ -1379,7 +1353,7 @@ startNavigation = function(entry)
 end
 
 -- =========================================================
--- VISUAL BEAMS & HIGHLIGHTS
+-- VISUAL TRACKING
 -- =========================================================
 
 local function destroyTrackerVisual(model)
@@ -1785,7 +1759,7 @@ print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD .. " Loaded.")
 pcall(function()
 	StarterGui:SetCore("SendNotification", {
 		Title = "Sols Scanner " .. VERSION,
-		Text = "Navigation AI + Smart Jump Active",
+		Text = "Navigation & Item names ready.",
 		Duration = 4
 	})
 end)
