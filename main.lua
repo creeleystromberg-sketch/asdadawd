@@ -1,5 +1,5 @@
 -- Sol's RNG Material Scanner & Tracker
--- Version: v0.9.0 | Strict Whitelist Filter & Exact Biomes
+-- Version: v0.9.5 | Priority Sorter, Instant Auto-Tracker & Default 18 Speed
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -12,8 +12,10 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local GUI_NAME = "SolsMaterialScanner"
-local VERSION = "v0.9.0"
-local BUILD = "BUILD-018"
+local VERSION = "v0.9.5"
+local BUILD = "BUILD-019"
+
+local DEFAULT_SPEED = 18
 
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then
@@ -46,41 +48,81 @@ local startNavigation = nil
 local stopNavigation = nil
 
 -- =========================================================
--- STRICT MATERIAL DEFINITIONS
+-- STRICT MATERIAL DEFINITIONS & PRIORITY PARSER
 -- =========================================================
 
-local VALID_ACTIONS = {
-	["pick up"] = true,
-	["pickup"] = true,
-	["collect"] = true,
-	["take"] = true,
+local BLACKLIST_WORDS = {
+	"quest", "board", "shop", "store", "merchant", "stella", "jake",
+	"bank", "cauldron", "altar", "portal", "teleport", "leaderboard",
+	"turret", "fish", "luck buff", "clover", "four leaf", "four-leaf",
+	"dialogue", "talk", "roll", "buy", "sell", "trade", "see quests"
 }
 
 local function lowered(value)
 	return string.lower(tostring(value or ""))
 end
 
+local function isEnvironmentObject(model, prompt)
+	if prompt then
+		local action = lowered(prompt.ActionText)
+		local object = lowered(prompt.ObjectText)
+		for _, word in ipairs(BLACKLIST_WORDS) do
+			if string.find(action, word, 1, true) or string.find(object, word, 1, true) then
+				return true
+			end
+		end
+	end
+
+	if model then
+		local current = model
+		while current and current ~= Workspace and current ~= game do
+			local name = lowered(current.Name)
+			for _, word in ipairs(BLACKLIST_WORDS) do
+				if string.find(name, word, 1, true) then
+					return true
+				end
+			end
+			current = current.Parent
+		end
+	end
+
+	return false
+end
+
+-- Priority matcher: Feather Vial checked before Bottle; Null & Corrupt checked aggressively
 local function matchMaterialData(text)
 	local low = lowered(text)
-	if string.find(low, "eternal flame", 1, true) or (string.find(low, "flame", 1, true) and not string.find(low, "flower", 1, true)) or string.find(low, "hell", 1, true) then
-		return "Eternal Flame", "Hell"
-	elseif string.find(low, "piece of star", 1, true) or string.find(low, "star piece", 1, true) or (string.find(low, "star", 1, true) and not string.find(low, "start", 1, true)) then
-		return "Piece of Star", "Starfall"
-	elseif string.find(low, "feather vial", 1, true) or string.find(low, "feather", 1, true) or string.find(low, "vial", 1, true) or string.find(low, "heaven", 1, true) then
+	if low == "" then return nil, nil end
+
+	-- 1. Feather Vial (Checked BEFORE Bottle/Vial)
+	if string.find(low, "feather", 1, true) or string.find(low, "vial", 1, true) then
 		return "Feather Vial", "Heaven"
-	elseif string.find(low, "curruptaine", 1, true) or string.find(low, "corruptaine", 1, true) or string.find(low, "corrupt", 1, true) then
-		return "Curruptaine", "Corruption"
-	elseif string.find(low, "null?", 1, true) or low == "null" or low == "null?" or string.find(low, "void", 1, true) then
+	-- 2. NULL?
+	elseif string.find(low, "null", 1, true) or string.find(low, "void", 1, true) then
 		return "NULL?", "Null"
-	elseif string.find(low, "wind essence", 1, true) or string.find(low, "essence", 1, true) or string.find(low, "wind", 1, true) then
+	-- 3. Curruptaine
+	elseif string.find(low, "currupt", 1, true) or string.find(low, "corrupt", 1, true) then
+		return "Curruptaine", "Corruption"
+	-- 4. Eternal Flame
+	elseif string.find(low, "eternal", 1, true) or string.find(low, "flame", 1, true) or (string.find(low, "hell", 1, true) and not string.find(low, "hello", 1, true)) then
+		return "Eternal Flame", "Hell"
+	-- 5. Piece of Star
+	elseif string.find(low, "star", 1, true) and not string.find(low, "start", 1, true) then
+		return "Piece of Star", "Starfall"
+	-- 6. Wind Essence
+	elseif string.find(low, "wind", 1, true) or string.find(low, "essence", 1, true) then
 		return "Wind Essence", "Windy"
+	-- 7. Icicle
 	elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) then
 		return "Icicle", "Snowy"
-	elseif string.find(low, "hour glass", 1, true) or string.find(low, "hourglass", 1, true) or string.find(low, "sand", 1, true) then
+	-- 8. Hour Glass
+	elseif string.find(low, "hour", 1, true) or string.find(low, "sand", 1, true) then
 		return "Hour Glass", "Sandstorm"
-	elseif string.find(low, "rainy bottle", 1, true) or string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
+	-- 9. Rainy Bottle (Only if not Feather/Vial)
+	elseif string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
 		return "Rainy Bottle", "Rainy"
 	end
+
 	return nil, nil
 end
 
@@ -89,44 +131,46 @@ local function identifyPrompt(prompt)
 		return nil, nil, nil
 	end
 
-	local action = lowered(prompt.ActionText)
-	if not VALID_ACTIONS[action] then
+	local model = prompt:FindFirstAncestorOfClass("Model")
+	if isEnvironmentObject(model, prompt) then
 		return nil, nil, nil
 	end
 
-	-- 1. Check ObjectText
+	-- 1. Check ObjectText of Prompt
 	if prompt.ObjectText and prompt.ObjectText ~= "" then
 		local name, biome = matchMaterialData(prompt.ObjectText)
 		if name and biome then
-			local part = prompt.Parent:IsA("BasePart") and prompt.Parent or prompt:FindFirstAncestorWhichIsA("BasePart")
+			local part = prompt.Parent:IsA("BasePart") and prompt.Parent or (model and model.PrimaryPart) or prompt:FindFirstAncestorWhichIsA("BasePart")
 			return name, biome, part
 		end
 	end
 
-	-- 2. Check Parent Model / Part Names
-	local model = prompt:FindFirstAncestorOfClass("Model")
-	if model then
+	-- 2. Check Model Name
+	if model and model.Name ~= "Workspace" and model.Name ~= "Map" and model.Name ~= "SpawnedItems" then
 		local name, biome = matchMaterialData(model.Name)
 		if name and biome then
 			local part = prompt.Parent:IsA("BasePart") and prompt.Parent or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
 			return name, biome, part
 		end
-
-		for _, child in ipairs(model:GetChildren()) do
-			if child:IsA("BasePart") then
-				local cName, cBiome = matchMaterialData(child.Name)
-				if cName and cBiome then
-					return cName, cBiome, child
-				end
-			end
-		end
 	end
 
-	-- 3. Check Parent Part
+	-- 3. Check Parent Part Name
 	if prompt.Parent and prompt.Parent:IsA("BasePart") then
 		local name, biome = matchMaterialData(prompt.Parent.Name)
 		if name and biome then
 			return name, biome, prompt.Parent
+		end
+	end
+
+	-- 4. Check Child Part Names (fallback for models named "Model")
+	if model then
+		for _, child in ipairs(model:GetChildren()) do
+			if child:IsA("BasePart") then
+				local name, biome = matchMaterialData(child.Name)
+				if name and biome then
+					return name, biome, child
+				end
+			end
 		end
 	end
 
@@ -301,7 +345,7 @@ local function pageTitle(page, text, subtitle)
 	s.Parent = page
 end
 
-pageTitle(materialsPage, "Materials", "Active Sol's RNG materials currently spawned.")
+pageTitle(materialsPage, "Materials", "Active Sol's RNG materials currently spawned on server.")
 
 local materialList = Instance.new("ScrollingFrame")
 materialList.Size = UDim2.new(1, 0, 1, -72)
@@ -340,9 +384,9 @@ pageTitle(trackerPage, "Tracker & AI", "Visual markers and automated routing.")
 local trackButton = Instance.new("TextButton")
 trackButton.Size = UDim2.fromOffset(170, 36)
 trackButton.Position = UDim2.fromOffset(0, 76)
-trackButton.BackgroundColor3 = Color3.fromRGB(32, 35, 42)
+trackButton.BackgroundColor3 = Color3.fromRGB(92, 68, 18)
 trackButton.BorderSizePixel = 0
-trackButton.Text = "TRACK ITEMS: OFF"
+trackButton.Text = "TRACK ITEMS: ON"
 trackButton.TextColor3 = Color3.fromRGB(235, 236, 240)
 trackButton.TextSize = 12
 trackButton.Font = Enum.Font.GothamBold
@@ -365,7 +409,7 @@ local trackerStatus = Instance.new("TextLabel")
 trackerStatus.Size = UDim2.new(1, 0, 0, 70)
 trackerStatus.Position = UDim2.fromOffset(0, 124)
 trackerStatus.BackgroundTransparency = 1
-trackerStatus.Text = "Tracker is off."
+trackerStatus.Text = "Tracker active."
 trackerStatus.TextColor3 = Color3.fromRGB(146, 151, 162)
 trackerStatus.TextSize = 12
 trackerStatus.Font = Enum.Font.Gotham
@@ -406,7 +450,7 @@ stopNavigationButton.MouseButton1Click:Connect(function()
 	end
 end)
 
-pageTitle(playerPage, "Player", "Local player adjustments.")
+pageTitle(playerPage, "Player", "Local player speed adjustments.")
 
 local speedCard = Instance.new("Frame")
 speedCard.Size = UDim2.new(1, 0, 0, 82)
@@ -432,7 +476,7 @@ local speedValue = Instance.new("TextLabel")
 speedValue.Size = UDim2.fromOffset(60, 28)
 speedValue.Position = UDim2.new(1, -144, 0, 27)
 speedValue.BackgroundTransparency = 1
-speedValue.Text = "16"
+speedValue.Text = tostring(DEFAULT_SPEED)
 speedValue.TextColor3 = Color3.fromRGB(210, 213, 220)
 speedValue.TextSize = 15
 speedValue.Font = Enum.Font.GothamMedium
@@ -466,7 +510,7 @@ local speedHint = Instance.new("TextLabel")
 speedHint.Size = UDim2.new(1, -180, 0, 20)
 speedHint.Position = UDim2.fromOffset(12, 39)
 speedHint.BackgroundTransparency = 1
-speedHint.Text = "Adjust movement speed"
+speedHint.Text = "Default speed is 18"
 speedHint.TextColor3 = Color3.fromRGB(114, 119, 130)
 speedHint.TextSize = 10
 speedHint.Font = Enum.Font.Gotham
@@ -516,7 +560,7 @@ serverStatus.TextXAlignment = Enum.TextXAlignment.Left
 serverStatus.TextYAlignment = Enum.TextYAlignment.Center
 serverStatus.Parent = serverPage
 
-pageTitle(diagnosticPage, "Diagnostic", "Inspect all ProximityPrompts across Workspace.")
+pageTitle(diagnosticPage, "Diagnostic", "Workspace prompt inspector.")
 
 local buttonRow = Instance.new("Frame")
 buttonRow.Size = UDim2.new(1, 0, 0, 34)
@@ -548,7 +592,7 @@ local diagnosticStatus = Instance.new("TextLabel")
 diagnosticStatus.Size = UDim2.new(1, 0, 0, 30)
 diagnosticStatus.Position = UDim2.fromOffset(0, 108)
 diagnosticStatus.BackgroundTransparency = 1
-diagnosticStatus.Text = "SCAN = check all prompts | LIVE = monitor newly spawned prompts"
+diagnosticStatus.Text = "SCAN = scan workspace | LIVE = monitor new prompts"
 diagnosticStatus.TextColor3 = Color3.fromRGB(120, 125, 136)
 diagnosticStatus.TextSize = 10
 diagnosticStatus.Font = Enum.Font.Gotham
@@ -662,33 +706,41 @@ local function currentHumanoid()
 	return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-local function refreshSpeedValue()
+local function applySpeed(speed)
 	local humanoid = currentHumanoid()
-	speedValue.Text = humanoid and tostring(math.floor(humanoid.WalkSpeed + 0.5)) or "?"
+	if humanoid then
+		humanoid.WalkSpeed = speed
+		speedValue.Text = tostring(math.floor(speed + 0.5))
+	end
 end
 
 minusSpeed.MouseButton1Click:Connect(function()
 	local humanoid = currentHumanoid()
 	if humanoid then
-		humanoid.WalkSpeed = math.max(1, humanoid.WalkSpeed - 1)
-		refreshSpeedValue()
+		applySpeed(math.max(1, humanoid.WalkSpeed - 1))
 	end
 end)
 
 plusSpeed.MouseButton1Click:Connect(function()
 	local humanoid = currentHumanoid()
 	if humanoid then
-		humanoid.WalkSpeed = humanoid.WalkSpeed + 1
-		refreshSpeedValue()
+		applySpeed(humanoid.WalkSpeed + 1)
 	end
 end)
 
-player.CharacterAdded:Connect(function()
-	task.wait(1)
-	refreshSpeedValue()
+player.CharacterAdded:Connect(function(char)
+	local hum = char:WaitForChild("Humanoid", 5)
+	if hum then
+		task.wait(0.2)
+		applySpeed(DEFAULT_SPEED)
+	end
 end)
 
-refreshSpeedValue()
+-- Set initial speed to 18
+task.spawn(function()
+	task.wait(0.1)
+	applySpeed(DEFAULT_SPEED)
+end)
 
 -- =========================================================
 -- UTILITY / SERVER JOIN
@@ -995,7 +1047,7 @@ local function followPath(token, entry, humanoid, root)
 
 	for i = 2, #waypoints do
 		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
-		if not entry.part or not entry.part.Parent then return false, "Target gone" end
+		if not entry.prompt.Parent or not entry.part.Parent then return false, "Target gone" end
 
 		local wp = waypoints[i]
 		local remainingDist = (root.Position - entry.part.Position).Magnitude
@@ -1420,15 +1472,18 @@ clearButton.MouseButton1Click:Connect(function()
 end)
 
 -- =========================================================
--- INITIALIZATION
+-- INITIALIZATION & AUTO-START
 -- =========================================================
 
 print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD .. " Loaded.")
 
+-- Auto-start item tracking immediately
+startTracker()
+
 pcall(function()
 	StarterGui:SetCore("SendNotification", {
 		Title = "Sols Scanner " .. VERSION,
-		Text = "Action whitelist active. Ready to scan.",
+		Text = "Auto-Tracker Active | Speed set to 18",
 		Duration = 4
 	})
 end)
