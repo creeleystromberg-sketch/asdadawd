@@ -1,5 +1,5 @@
 -- Sol's RNG Material Scanner & Tracker
--- Version: v0.8.8 | Fixed Quest Board False Positive & Environment Filter
+-- Version: v0.9.0 | Strict Whitelist Filter & Exact Biomes
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -12,8 +12,8 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local GUI_NAME = "SolsMaterialScanner"
-local VERSION = "v0.8.8"
-local BUILD = "BUILD-017"
+local VERSION = "v0.9.0"
+local BUILD = "BUILD-018"
 
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then
@@ -46,100 +46,91 @@ local startNavigation = nil
 local stopNavigation = nil
 
 -- =========================================================
--- FILTERS & MATERIAL RECOGNITION
+-- STRICT MATERIAL DEFINITIONS
 -- =========================================================
 
-local BLACKLIST_WORDS = {
-	"quest", "board", "shop", "store", "merchant", "stella", "jake",
-	"bank", "craft", "cauldron", "altar", "portal", "teleport",
-	"leaderboard", "turret", "fish", "luck buff", "clover", "four leaf",
-	"four-leaf", "dialogue", "talk", "roll", "buy", "sell", "trade",
-	"interact", "view", "open", "read", "sign", "statue", "stand"
+local VALID_ACTIONS = {
+	["pick up"] = true,
+	["pickup"] = true,
+	["collect"] = true,
+	["take"] = true,
 }
 
 local function lowered(value)
 	return string.lower(tostring(value or ""))
 end
 
-local function isBlacklisted(model, prompt)
-	if prompt then
-		local action = lowered(prompt.ActionText)
-		local object = lowered(prompt.ObjectText)
-
-		for _, word in ipairs(BLACKLIST_WORDS) do
-			if string.find(action, word, 1, true) or string.find(object, word, 1, true) then
-				return true
-			end
-		end
-	end
-
-	if model then
-		local current = model
-		while current and current ~= Workspace and current ~= game do
-			local name = lowered(current.Name)
-			for _, word in ipairs(BLACKLIST_WORDS) do
-				if string.find(name, word, 1, true) then
-					return true
-				end
-			end
-			current = current.Parent
-		end
-	end
-
-	return false
-end
-
-local function identifyMaterial(model, prompt)
-	if isBlacklisted(model, prompt) then
-		return nil, nil
-	end
-
-	local promptObj = prompt and lowered(prompt.ObjectText) or ""
-	local promptAct = prompt and lowered(prompt.ActionText) or ""
-	local modelName = model and lowered(model.Name) or ""
-
-	local textPool = promptObj .. " " .. promptAct .. " " .. modelName
-
-	-- Priority 1: Check direct names
-	if string.find(textPool, "eternal flame", 1, true) or string.find(textPool, "flame", 1, true) or string.find(textPool, "hell", 1, true) then
+local function matchMaterialData(text)
+	local low = lowered(text)
+	if string.find(low, "eternal flame", 1, true) or (string.find(low, "flame", 1, true) and not string.find(low, "flower", 1, true)) or string.find(low, "hell", 1, true) then
 		return "Eternal Flame", "Hell"
-	elseif string.find(textPool, "piece of star", 1, true) or string.find(textPool, "star piece", 1, true) or (string.find(textPool, "star", 1, true) and not string.find(textPool, "start", 1, true)) then
+	elseif string.find(low, "piece of star", 1, true) or string.find(low, "star piece", 1, true) or (string.find(low, "star", 1, true) and not string.find(low, "start", 1, true)) then
 		return "Piece of Star", "Starfall"
-	elseif string.find(textPool, "feather vial", 1, true) or string.find(textPool, "feather", 1, true) or string.find(textPool, "vial", 1, true) or string.find(textPool, "heaven", 1, true) then
+	elseif string.find(low, "feather vial", 1, true) or string.find(low, "feather", 1, true) or string.find(low, "vial", 1, true) or string.find(low, "heaven", 1, true) then
 		return "Feather Vial", "Heaven"
-	elseif string.find(textPool, "curruptaine", 1, true) or string.find(textPool, "corruptaine", 1, true) or string.find(textPool, "corrupt", 1, true) then
+	elseif string.find(low, "curruptaine", 1, true) or string.find(low, "corruptaine", 1, true) or string.find(low, "corrupt", 1, true) then
 		return "Curruptaine", "Corruption"
-	elseif string.find(textPool, "null", 1, true) or string.find(textPool, "void", 1, true) then
+	elseif string.find(low, "null?", 1, true) or low == "null" or low == "null?" or string.find(low, "void", 1, true) then
 		return "NULL?", "Null"
-	elseif string.find(textPool, "wind essence", 1, true) or string.find(textPool, "essence", 1, true) or string.find(textPool, "wind", 1, true) then
+	elseif string.find(low, "wind essence", 1, true) or string.find(low, "essence", 1, true) or string.find(low, "wind", 1, true) then
 		return "Wind Essence", "Windy"
-	elseif string.find(textPool, "icicle", 1, true) or string.find(textPool, "snow", 1, true) then
+	elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) then
 		return "Icicle", "Snowy"
-	elseif string.find(textPool, "hour glass", 1, true) or string.find(textPool, "hourglass", 1, true) or string.find(textPool, "sand", 1, true) then
+	elseif string.find(low, "hour glass", 1, true) or string.find(low, "hourglass", 1, true) or string.find(low, "sand", 1, true) then
 		return "Hour Glass", "Sandstorm"
-	elseif string.find(textPool, "rainy bottle", 1, true) or string.find(textPool, "rain", 1, true) or string.find(textPool, "bottle", 1, true) then
+	elseif string.find(low, "rainy bottle", 1, true) or string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
 		return "Rainy Bottle", "Rainy"
 	end
+	return nil, nil
+end
 
-	-- Priority 2: Check immediate child parts if model name was generic
+local function identifyPrompt(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
+		return nil, nil, nil
+	end
+
+	local action = lowered(prompt.ActionText)
+	if not VALID_ACTIONS[action] then
+		return nil, nil, nil
+	end
+
+	-- 1. Check ObjectText
+	if prompt.ObjectText and prompt.ObjectText ~= "" then
+		local name, biome = matchMaterialData(prompt.ObjectText)
+		if name and biome then
+			local part = prompt.Parent:IsA("BasePart") and prompt.Parent or prompt:FindFirstAncestorWhichIsA("BasePart")
+			return name, biome, part
+		end
+	end
+
+	-- 2. Check Parent Model / Part Names
+	local model = prompt:FindFirstAncestorOfClass("Model")
 	if model then
+		local name, biome = matchMaterialData(model.Name)
+		if name and biome then
+			local part = prompt.Parent:IsA("BasePart") and prompt.Parent or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+			return name, biome, part
+		end
+
 		for _, child in ipairs(model:GetChildren()) do
 			if child:IsA("BasePart") then
-				local cn = lowered(child.Name)
-				if string.find(cn, "flame", 1, true) then return "Eternal Flame", "Hell"
-				elseif string.find(cn, "star", 1, true) and not string.find(cn, "start", 1, true) then return "Piece of Star", "Starfall"
-				elseif string.find(cn, "feather", 1, true) or string.find(cn, "vial", 1, true) then return "Feather Vial", "Heaven"
-				elseif string.find(cn, "corrupt", 1, true) then return "Curruptaine", "Corruption"
-				elseif string.find(cn, "null", 1, true) then return "NULL?", "Null"
-				elseif string.find(cn, "wind", 1, true) then return "Wind Essence", "Windy"
-				elseif string.find(cn, "icicle", 1, true) then return "Icicle", "Snowy"
-				elseif string.find(cn, "hour", 1, true) or string.find(cn, "sand", 1, true) then return "Hour Glass", "Sandstorm"
-				elseif string.find(cn, "bottle", 1, true) then return "Rainy Bottle", "Rainy" end
+				local cName, cBiome = matchMaterialData(child.Name)
+				if cName and cBiome then
+					return cName, cBiome, child
+				end
 			end
 		end
 	end
 
-	return nil, nil
+	-- 3. Check Parent Part
+	if prompt.Parent and prompt.Parent:IsA("BasePart") then
+		local name, biome = matchMaterialData(prompt.Parent.Name)
+		if name and biome then
+			return name, biome, prompt.Parent
+		end
+	end
+
+	return nil, nil, nil
 end
 
 local materialRows = {}
@@ -310,7 +301,7 @@ local function pageTitle(page, text, subtitle)
 	s.Parent = page
 end
 
-pageTitle(materialsPage, "Materials", "Only genuine dropped materials appear here.")
+pageTitle(materialsPage, "Materials", "Active Sol's RNG materials currently spawned.")
 
 local materialList = Instance.new("ScrollingFrame")
 materialList.Size = UDim2.new(1, 0, 1, -72)
@@ -389,7 +380,7 @@ navigationStatus.Position = UDim2.fromOffset(0, 205)
 navigationStatus.BackgroundColor3 = Color3.fromRGB(18, 19, 23)
 navigationStatus.BackgroundTransparency = 0.2
 navigationStatus.BorderSizePixel = 0
-navigationStatus.Text = "AI: idle\nClick GO next to a material in the Materials tab."
+navigationStatus.Text = "AI: idle\nClick GO next to a material in Materials tab."
 navigationStatus.TextColor3 = Color3.fromRGB(181, 185, 194)
 navigationStatus.TextSize = 11
 navigationStatus.Font = Enum.Font.Gotham
@@ -525,7 +516,7 @@ serverStatus.TextXAlignment = Enum.TextXAlignment.Left
 serverStatus.TextYAlignment = Enum.TextYAlignment.Center
 serverStatus.Parent = serverPage
 
-pageTitle(diagnosticPage, "Diagnostic", "Workspace scanner for prompts and parts.")
+pageTitle(diagnosticPage, "Diagnostic", "Inspect all ProximityPrompts across Workspace.")
 
 local buttonRow = Instance.new("Frame")
 buttonRow.Size = UDim2.new(1, 0, 0, 34)
@@ -557,7 +548,7 @@ local diagnosticStatus = Instance.new("TextLabel")
 diagnosticStatus.Size = UDim2.new(1, 0, 0, 30)
 diagnosticStatus.Position = UDim2.fromOffset(0, 108)
 diagnosticStatus.BackgroundTransparency = 1
-diagnosticStatus.Text = "SCAN = current objects | LIVE = newly created objects"
+diagnosticStatus.Text = "SCAN = check all prompts | LIVE = monitor newly spawned prompts"
 diagnosticStatus.TextColor3 = Color3.fromRGB(120, 125, 136)
 diagnosticStatus.TextSize = 10
 diagnosticStatus.Font = Enum.Font.Gotham
@@ -852,7 +843,7 @@ local function refreshMaterialsUI(entries)
 			end
 		end)
 
-		materialRows[entry.model] = {
+		materialRows[entry.prompt] = {
 			frame = row,
 			name = entry.name
 		}
@@ -868,14 +859,6 @@ local function trackerRoot()
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function targetPartForModel(model, prompt)
-	if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
-		return prompt.Parent
-	end
-
-	return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-end
-
 local function getAllPickupEntries()
 	local root = trackerRoot()
 	local entries = {}
@@ -885,23 +868,16 @@ local function getAllPickupEntries()
 
 	for _, descendant in ipairs(Workspace:GetDescendants()) do
 		if descendant:IsA("ProximityPrompt") and descendant.Enabled then
-			local model = descendant:FindFirstAncestorOfClass("Model")
-			if model and not seen[model] then
-				local standardName, biome = identifyMaterial(model, descendant)
-				if standardName and biome then
-					local part = targetPartForModel(model, descendant)
-					if part then
-						seen[model] = true
-						table.insert(entries, {
-							model = model,
-							prompt = descendant,
-							part = part,
-							name = standardName,
-							biome = biome,
-							distance = (root.Position - part.Position).Magnitude,
-						})
-					end
-				end
+			local name, biome, part = identifyPrompt(descendant)
+			if name and biome and part and not seen[descendant] then
+				seen[descendant] = true
+				table.insert(entries, {
+					prompt = descendant,
+					part = part,
+					name = name,
+					biome = biome,
+					distance = (root.Position - part.Position).Magnitude,
+				})
 			end
 		end
 	end
@@ -1019,7 +995,7 @@ local function followPath(token, entry, humanoid, root)
 
 	for i = 2, #waypoints do
 		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
-		if not entry.model.Parent or not entry.part.Parent then return false, "Target gone" end
+		if not entry.part or not entry.part.Parent then return false, "Target gone" end
 
 		local wp = waypoints[i]
 		local remainingDist = (root.Position - entry.part.Position).Magnitude
@@ -1056,7 +1032,7 @@ stopNavigation = function(reason)
 end
 
 startNavigation = function(entry)
-	if not entry or not entry.model or not entry.model.Parent or not entry.part or not entry.part.Parent then
+	if not entry or not entry.prompt or not entry.prompt.Parent or not entry.part or not entry.part.Parent then
 		setNavigationStatus("AI: error", "Material no longer exists.")
 		return
 	end
@@ -1071,7 +1047,7 @@ startNavigation = function(entry)
 	task.spawn(function()
 		for attempt = 1, NAV_MAX_REPATHS do
 			if token ~= navigationToken or not navigationRunning then return end
-			if not entry.model.Parent or not entry.part.Parent then
+			if not entry.prompt.Parent or not entry.part.Parent then
 				stopNavigation("Material was collected.")
 				return
 			end
@@ -1090,13 +1066,13 @@ startNavigation = function(entry)
 				local fired, err = tryFirePrompt(entry.prompt)
 				if fired then
 					task.wait(0.35)
-					if not entry.model.Parent then
+					if not entry.prompt.Parent then
 						navigationRunning = false
 						setNavigationStatus("AI: complete", entry.name .. " collected.")
 						return
 					end
 					task.wait(0.5)
-					if not entry.model.Parent then
+					if not entry.prompt.Parent then
 						navigationRunning = false
 						setNavigationStatus("AI: complete", entry.name .. " collected.")
 						return
@@ -1132,8 +1108,8 @@ end
 -- VISUAL TRACKING
 -- =========================================================
 
-local function destroyTrackerVisual(model)
-	local visual = trackerVisuals[model]
+local function destroyTrackerVisual(key)
+	local visual = trackerVisuals[key]
 	if not visual then return end
 
 	for _, object in pairs(visual) do
@@ -1141,20 +1117,20 @@ local function destroyTrackerVisual(model)
 			pcall(function() object:Destroy() end)
 		end
 	end
-	trackerVisuals[model] = nil
+	trackerVisuals[key] = nil
 end
 
 local function clearTrackerVisuals()
-	local models = {}
-	for model in pairs(trackerVisuals) do table.insert(models, model) end
-	for _, model in ipairs(models) do destroyTrackerVisual(model) end
+	local keys = {}
+	for key in pairs(trackerVisuals) do table.insert(keys, key) end
+	for _, key in ipairs(keys) do destroyTrackerVisual(key) end
 end
 
-local function createTrackerVisual(model, targetPart, name, biome)
+local function createTrackerVisual(prompt, targetPart, name, biome)
 	local root = trackerRoot()
-	if not root or not model or not targetPart then return end
+	if not root or not prompt or not targetPart then return end
 
-	destroyTrackerVisual(model)
+	destroyTrackerVisual(prompt)
 
 	local sourceAttachment = Instance.new("Attachment")
 	sourceAttachment.Name = "SolsTrackerSource"
@@ -1183,7 +1159,7 @@ local function createTrackerVisual(model, targetPart, name, biome)
 
 	local highlight = Instance.new("Highlight")
 	highlight.Name = "SolsTrackerHighlight"
-	highlight.Adornee = model
+	highlight.Adornee = targetPart:FindFirstAncestorOfClass("Model") or targetPart
 	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	highlight.FillColor = Color3.fromRGB(235, 238, 244)
 	highlight.FillTransparency = 0.88
@@ -1236,7 +1212,7 @@ local function createTrackerVisual(model, targetPart, name, biome)
 	distanceLabel.Font = Enum.Font.Gotham
 	distanceLabel.Parent = card
 
-	trackerVisuals[model] = {
+	trackerVisuals[prompt] = {
 		sourceAttachment = sourceAttachment,
 		targetAttachment = targetAttachment,
 		beam = beam,
@@ -1257,11 +1233,11 @@ local function updateTracker()
 	local active = {}
 
 	for _, entry in ipairs(entries) do
-		active[entry.model] = true
-		local visual = trackerVisuals[entry.model]
+		active[entry.prompt] = true
+		local visual = trackerVisuals[entry.prompt]
 		if not visual or not visual.beam or not visual.beam.Parent or visual.targetPart ~= entry.part then
-			createTrackerVisual(entry.model, entry.part, entry.name, entry.biome)
-			visual = trackerVisuals[entry.model]
+			createTrackerVisual(entry.prompt, entry.part, entry.name, entry.biome)
+			visual = trackerVisuals[entry.prompt]
 		end
 
 		if visual then
@@ -1273,13 +1249,13 @@ local function updateTracker()
 	end
 
 	local stale = {}
-	for model in pairs(trackerVisuals) do
-		if not active[model] or not model.Parent then table.insert(stale, model) end
+	for prompt in pairs(trackerVisuals) do
+		if not active[prompt] or not prompt.Parent then table.insert(stale, prompt) end
 	end
-	for _, model in ipairs(stale) do destroyTrackerVisual(model) end
+	for _, prompt in ipairs(stale) do destroyTrackerVisual(prompt) end
 
 	if #entries == 0 then
-		trackerStatus.Text = "No items detected on map."
+		trackerStatus.Text = "No materials detected on map."
 		return
 	end
 
@@ -1292,7 +1268,7 @@ local function startTracker()
 	trackerEnabled = true
 	trackButton.Text = "TRACK ITEMS: ON"
 	trackButton.BackgroundColor3 = Color3.fromRGB(92, 68, 18)
-	trackerStatus.Text = "Scanning workspace..."
+	trackerStatus.Text = "Scanning for material pickups..."
 
 	if trackerConnection then trackerConnection:Disconnect() end
 
@@ -1349,31 +1325,30 @@ local function addVisualRow(index, entry)
 	row.TextWrapped = true
 	row.TextXAlignment = Enum.TextXAlignment.Left
 	row.TextYAlignment = Enum.TextYAlignment.Top
-	row.Text = "[" .. index .. "] [" .. entry.source .. "] " .. entry.name .. " <" .. entry.className .. ">" ..
-		"\nDistance: " .. distanceText .. " | Pos: " .. entry.position ..
-		"\nParent: " .. entry.parent .. "\nPath: " .. entry.path
+	row.Text = "[" .. index .. "] [" .. entry.source .. "] " .. entry.name ..
+		"\nAction: " .. entry.action .. " | Object: " .. entry.object ..
+		"\nDistance: " .. distanceText .. " | Path: " .. entry.path
 	row.Parent = resultsFrame
 	uiCorner(row, 5)
 end
 
-local function addEntry(instance, source)
-	if not instance or not instance.Parent then return end
-	local path = instance:GetFullName()
+local function addEntry(prompt, source)
+	if not prompt or not prompt.Parent then return end
+	local path = prompt:GetFullName()
 	local uniqueKey = source .. "|" .. path
 	if diagnosticSeen[uniqueKey] then return end
 
 	diagnosticSeen[uniqueKey] = true
 	local root = trackerRoot()
-	local pos = instance:IsA("BasePart") and instance.Position or (instance:IsA("Model") and instance:GetPivot().Position) or Vector3.zero
+	local pos = prompt.Parent:IsA("BasePart") and prompt.Parent.Position or Vector3.zero
 	local dist = root and (root.Position - pos).Magnitude or nil
 
 	local entry = {
 		source = source,
-		name = instance.Name,
-		className = instance.ClassName,
+		name = prompt.Name,
+		action = prompt.ActionText or "",
+		object = prompt.ObjectText or "",
 		distance = dist,
-		position = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z),
-		parent = instance.Parent and instance.Parent:GetFullName() or "?",
 		path = path
 	}
 
@@ -1389,7 +1364,7 @@ scanButton.MouseButton1Click:Connect(function()
 			addEntry(instance, "SCAN")
 		end
 	end
-	diagnosticStatus.Text = "Scan complete. Added " .. (#diagnosticEntries - beforeCount) .. " entries."
+	diagnosticStatus.Text = "Scan complete. Found " .. (#diagnosticEntries - beforeCount) .. " prompts."
 end)
 
 liveButton.MouseButton1Click:Connect(function()
@@ -1404,7 +1379,7 @@ liveButton.MouseButton1Click:Connect(function()
 				if not liveMonitorEnabled or not instance or not instance.Parent then return end
 				if instance:IsA("ProximityPrompt") then
 					addEntry(instance, "LIVE")
-					diagnosticStatus.Text = "Captured: " .. instance.Name .. " | Total: " .. #diagnosticEntries
+					diagnosticStatus.Text = "Captured: " .. instance.ActionText .. " | Total: " .. #diagnosticEntries
 				end
 			end)
 		end)
@@ -1427,7 +1402,7 @@ copyButton.MouseButton1Click:Connect(function()
 	end
 	local lines = {"=== Diagnostic Export ==="}
 	for i, e in ipairs(diagnosticEntries) do
-		table.insert(lines, string.format("[%d] %s <%s> | Pos: %s | Path: %s", i, e.name, e.className, e.position, e.path))
+		table.insert(lines, string.format("[%d] Action: '%s' | Object: '%s' | Path: %s", i, e.action, e.object, e.path))
 	end
 	local exportText = table.concat(lines, "\n")
 	if copyToClipboard(exportText) then
@@ -1453,7 +1428,7 @@ print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD .. " Loaded.")
 pcall(function()
 	StarterGui:SetCore("SendNotification", {
 		Title = "Sols Scanner " .. VERSION,
-		Text = "Quest Board fixed. Ready to scan.",
+		Text = "Action whitelist active. Ready to scan.",
 		Duration = 4
 	})
 end)
