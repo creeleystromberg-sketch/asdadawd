@@ -1,12 +1,5 @@
--- Sol's RNG Material Scanner
--- Main menu + Diagnostic tools
--- Diagnostic can:
---   1. Manual scan Workspace
---   2. Live-monitor newly created objects
---   3. Copy all diagnostic results to clipboard
---   4. Clear the diagnostic log
---
--- Tracker + navigation build: can pathfind to selected materials and trigger their pickup prompt.
+-- Sol's RNG Material Scanner & Navigator
+-- Version: v0.8.0 | Enhanced Pathfinding & Smart Jump
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -19,8 +12,8 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local GUI_NAME = "SolsMaterialScanner"
-local VERSION = "v0.7.2"
-local BUILD = "BUILD-013"
+local VERSION = "v0.8.0"
+local BUILD = "BUILD-014"
 
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then
@@ -51,39 +44,18 @@ local navigationRunning = false
 local navigationTargetModel = nil
 local navigationTargetName = nil
 
--- Forward declarations because UI buttons are created before navigation code.
 local startNavigation = nil
 local stopNavigation = nil
 
 local KEYWORDS = {
-	"bottle",
-	"potion",
-	"flame",
-	"eternal",
-	"corrupt",
-	"corruption",
-	"material",
-	"collect",
-	"pickup",
-	"item",
-	"spawn",
-	"biome",
-	"token",
-	"star",
-	"rain",
-	"wind",
-	"hell",
-	"heaven",
-	"void",
-	"galaxy",
-	"comet",
-	"meteor",
-	"strange",
-	"null"
+	"bottle", "potion", "flame", "eternal", "corrupt", "corruption",
+	"material", "collect", "pickup", "item", "spawn", "biome",
+	"token", "star", "rain", "wind", "hell", "heaven", "void",
+	"galaxy", "comet", "meteor", "strange", "null"
 }
 
 -- =========================================================
--- MAIN WINDOW / UI
+-- ITEM BASE / MAPPINGS
 -- =========================================================
 
 local MATERIAL_INFO = {
@@ -152,6 +124,10 @@ end
 local selectedMaterialModel = nil
 local selectedMaterialName = nil
 local materialRows = {}
+
+-- =========================================================
+-- UI HELPERS & SETUP
+-- =========================================================
 
 local function uiCorner(parent, radius)
 	local c = Instance.new("UICorner")
@@ -315,8 +291,8 @@ local function pageTitle(page, text, subtitle)
 	s.Parent = page
 end
 
--- MATERIALS
-pageTitle(materialsPage, "Materials", "Only materials currently detected by the tracker appear here.")
+-- Materials Page
+pageTitle(materialsPage, "Materials", "Materials detected in real-time in the current server.")
 
 local materialList = Instance.new("ScrollingFrame")
 materialList.Size = UDim2.new(1, 0, 1, -72)
@@ -350,8 +326,8 @@ emptyMaterials.TextSize = 12
 emptyMaterials.Font = Enum.Font.Gotham
 emptyMaterials.Parent = materialList
 
--- TRACKER
-pageTitle(trackerPage, "Tracker", "Visual tracking remains the base for material detection and future navigation.")
+-- Tracker Page
+pageTitle(trackerPage, "Tracker & AI", "Visual beam tracking and pathfinding navigation.")
 
 local trackButton = Instance.new("TextButton")
 trackButton.Size = UDim2.fromOffset(170, 36)
@@ -422,8 +398,8 @@ stopNavigationButton.MouseButton1Click:Connect(function()
 	end
 end)
 
--- PLAYER
-pageTitle(playerPage, "Player", "Small local movement adjustments.")
+-- Player Page
+pageTitle(playerPage, "Player", "Local movement and speed adjustments.")
 
 local speedCard = Instance.new("Frame")
 speedCard.Size = UDim2.new(1, 0, 0, 82)
@@ -483,15 +459,15 @@ local speedHint = Instance.new("TextLabel")
 speedHint.Size = UDim2.new(1, -180, 0, 20)
 speedHint.Position = UDim2.fromOffset(12, 39)
 speedHint.BackgroundTransparency = 1
-speedHint.Text = "Changes by exactly 1"
+speedHint.Text = "Adjusts WalkSpeed smoothly"
 speedHint.TextColor3 = Color3.fromRGB(114, 119, 130)
 speedHint.TextSize = 10
 speedHint.Font = Enum.Font.Gotham
 speedHint.TextXAlignment = Enum.TextXAlignment.Left
 speedHint.Parent = speedCard
 
--- SERVER
-pageTitle(serverPage, "Private Server", "Paste a private server link or a server instance id.")
+-- Server Page
+pageTitle(serverPage, "Private Server", "Teleport directly via Join Guard, link, or JobId.")
 
 local serverInput = Instance.new("TextBox")
 serverInput.Size = UDim2.new(1, 0, 0, 38)
@@ -534,8 +510,8 @@ serverStatus.TextXAlignment = Enum.TextXAlignment.Left
 serverStatus.TextYAlignment = Enum.TextYAlignment.Center
 serverStatus.Parent = serverPage
 
--- DIAGNOSTIC
-pageTitle(diagnosticPage, "Diagnostic", "Keep the existing scanner available while we build the navigation system.")
+-- Diagnostic Page
+pageTitle(diagnosticPage, "Diagnostic", "Inspect workspace objects and prompt structures.")
 
 local buttonRow = Instance.new("Frame")
 buttonRow.Size = UDim2.new(1, 0, 0, 34)
@@ -597,7 +573,7 @@ resultsLayout.Padding = UDim.new(0, 5)
 resultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 resultsLayout.Parent = resultsFrame
 
--- MINIMIZED BUTTON
+-- Minimized floating toggle
 local miniButton = Instance.new("TextButton")
 miniButton.Size = UDim2.fromOffset(44, 44)
 miniButton.Position = UDim2.new(0.5, -22, 0.5, -22)
@@ -637,25 +613,11 @@ local function showPage(name, button)
 	currentPage = name
 end
 
-materialsTabButton.MouseButton1Click:Connect(function()
-	showPage("Materials", materialsTabButton)
-end)
-
-trackerTabButton.MouseButton1Click:Connect(function()
-	showPage("Tracker", trackerTabButton)
-end)
-
-playerTabButton.MouseButton1Click:Connect(function()
-	showPage("Player", playerTabButton)
-end)
-
-serverTabButton.MouseButton1Click:Connect(function()
-	showPage("Server", serverTabButton)
-end)
-
-diagnosticTabButton.MouseButton1Click:Connect(function()
-	showPage("Diagnostic", diagnosticTabButton)
-end)
+materialsTabButton.MouseButton1Click:Connect(function() showPage("Materials", materialsTabButton) end)
+trackerTabButton.MouseButton1Click:Connect(function() showPage("Tracker", trackerTabButton) end)
+playerTabButton.MouseButton1Click:Connect(function() showPage("Player", playerTabButton) end)
+serverTabButton.MouseButton1Click:Connect(function() showPage("Server", serverTabButton) end)
+diagnosticTabButton.MouseButton1Click:Connect(function() showPage("Diagnostic", diagnosticTabButton) end)
 
 showPage("Materials", materialsTabButton)
 
@@ -686,9 +648,7 @@ closeButton.MouseButton1Click:Connect(function()
 	for _, visual in pairs(trackerVisuals) do
 		for _, object in pairs(visual) do
 			if typeof(object) == "Instance" then
-				pcall(function()
-					object:Destroy()
-				end)
+				pcall(function() object:Destroy() end)
 			end
 		end
 	end
@@ -729,19 +689,14 @@ end)
 
 refreshSpeedValue()
 
+-- =========================================================
+-- UTILITY / CLIPBOARD / SERVER JOIN
+-- =========================================================
+
 local function getExternalUrlOpener()
-	if type(openurl) == "function" then
-		return openurl
-	end
-
-	if type(open_url) == "function" then
-		return open_url
-	end
-
-	if syn and type(syn.open_url) == "function" then
-		return syn.open_url
-	end
-
+	if type(openurl) == "function" then return openurl end
+	if type(open_url) == "function" then return open_url end
+	if syn and type(syn.open_url) == "function" then return syn.open_url end
 	return nil
 end
 
@@ -752,128 +707,71 @@ local function copyToClipboard(text)
 		or (syn and type(syn.write_clipboard) == "function" and syn.write_clipboard)
 
 	if clipboard then
-		local ok = pcall(function()
-			clipboard(text)
-		end)
+		local ok = pcall(function() clipboard(text) end)
 		return ok
 	end
-
 	return false
 end
 
 local function cleanServerInput(raw)
-	local text = tostring(raw or "")
-	text = text:gsub("\\_", "_")
-
+	local text = tostring(raw or ""):gsub("\\_", "_")
 	local url = text:match("(https?://[^%s%)%]]+)")
-	if url then
-		text = url
-	end
-
-	text = text:gsub('[">]+$', "")
-	text = text:gsub("%s+", "")
+	if url then text = url end
+	text = text:gsub('[">]+$', ""):gsub("%s+", "")
 	return text
 end
 
 joinServer.MouseButton1Click:Connect(function()
 	local text = cleanServerInput(serverInput.Text)
-
 	if text == "" then
 		serverStatus.Text = "Paste a server link first."
 		return
 	end
-
 	serverInput.Text = text
 
 	local joinGuardId = text:match("^https?://join%-guard%.solsstattracker%.com/([%w_%-]+)")
-
 	if joinGuardId then
-		serverStatus.Text = "Join Guard detected. Opening verification..."
-
+		serverStatus.Text = "Join Guard detected. Opening..."
 		local opener = getExternalUrlOpener()
-
 		if opener then
-			local ok, err = pcall(function()
-				opener(text)
-			end)
-
-			if not ok then
-				serverStatus.Text = "Could not open URL: " .. tostring(err)
-			end
+			pcall(function() opener(text) end)
 		else
-			local copied = copyToClipboard(text)
-
-			if copied then
-				serverStatus.Text =
-					"Join Guard requires browser verification. Link copied — open it in your browser."
-			else
-				serverStatus.Text =
-					"Join Guard requires browser verification. Open the pasted link manually."
-			end
+			copyToClipboard(text)
+			serverStatus.Text = "Link copied — complete verification in your browser."
 		end
-
 		return
 	end
 
 	local gameInstanceId = text:match("[?&]gameInstanceId=([^&]+)")
-
 	if gameInstanceId then
 		serverStatus.Text = "Joining server instance..."
-
-		local ok, err = pcall(function()
-			TeleportService:TeleportToPlaceInstance(game.PlaceId, gameInstanceId, player)
-		end)
-
-		if not ok then
-			serverStatus.Text = "Join failed: " .. tostring(err)
-		end
+		pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, gameInstanceId, player) end)
 		return
 	end
 
-	if string.find(lowered(text), "roblox.com/", 1, true)
-		and (
-			text:match("[?&]code=([^&]+)")
-			or text:match("[?&]privateServerLinkCode=([^&]+)")
-		) then
-
+	if string.find(lowered(text), "roblox.com/", 1, true) and (text:match("[?&]code=([^&]+)") or text:match("[?&]privateServerLinkCode=([^&]+)")) then
 		local opener = getExternalUrlOpener()
-
 		if opener then
-			serverStatus.Text = "Opening Roblox private server link..."
-
-			local ok, err = pcall(function()
-				opener(text)
-			end)
-
-			if not ok then
-				serverStatus.Text = "Could not open Roblox link: " .. tostring(err)
-			end
+			pcall(function() opener(text) end)
 		else
-			local copied = copyToClipboard(text)
-			serverStatus.Text = copied
-				and "Private server link copied. Open it in your browser."
-				or "Open this private server link in your browser."
+			copyToClipboard(text)
+			serverStatus.Text = "Private server link copied to clipboard."
 		end
-
 		return
 	end
 
 	if #text > 20 and not string.find(lowered(text), "http", 1, true) then
 		serverStatus.Text = "Joining JobId..."
-
-		local ok, err = pcall(function()
-			TeleportService:TeleportToPlaceInstance(game.PlaceId, text, player)
-		end)
-
-		if not ok then
-			serverStatus.Text = "Server id failed: " .. tostring(err)
-		end
-
+		pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, text, player) end)
 		return
 	end
 
 	serverStatus.Text = "Unsupported server link format."
 end)
+
+-- =========================================================
+-- MATERIAL UI REFRESH
+-- =========================================================
 
 local function clearMaterialRows()
 	for _, row in pairs(materialRows) do
@@ -888,15 +786,10 @@ local function refreshMaterialsUI(entries)
 	clearMaterialRows()
 
 	local materialEntries = {}
-
 	for _, entry in ipairs(entries or {}) do
 		local biome, cleanName = getMaterialBiome(entry.name)
 		entry.name = cleanName
-
-		table.insert(materialEntries, {
-			entry = entry,
-			biome = biome
-		})
+		table.insert(materialEntries, { entry = entry, biome = biome })
 	end
 
 	emptyMaterials.Visible = #materialEntries == 0
@@ -929,11 +822,7 @@ local function refreshMaterialsUI(entries)
 		details.Size = UDim2.new(1, -155, 0, 18)
 		details.Position = UDim2.fromOffset(10, 31)
 		details.BackgroundTransparency = 1
-		details.Text =
-			data.biome ..
-			"  •  " ..
-			tostring(math.floor(entry.distance + 0.5)) ..
-			" studs"
+		details.Text = data.biome .. "  •  " .. tostring(math.floor(entry.distance + 0.5)) .. " studs"
 		details.TextColor3 = Color3.fromRGB(124, 129, 140)
 		details.TextSize = 10
 		details.Font = Enum.Font.Gotham
@@ -955,14 +844,12 @@ local function refreshMaterialsUI(entries)
 		go.MouseButton1Click:Connect(function()
 			selectedMaterialModel = entry.model
 			selectedMaterialName = entry.name
-
 			showPage("Tracker", trackerTabButton)
 
 			if startNavigation then
 				startNavigation(entry)
 			else
-				navigationStatus.Text =
-					"AI error: navigation module has not initialized."
+				navigationStatus.Text = "AI error: navigation module not ready."
 			end
 		end)
 
@@ -974,7 +861,7 @@ local function refreshMaterialsUI(entries)
 end
 
 -- =========================================================
--- ITEM TRACKER
+-- ITEM DETECTION LOGIC
 -- =========================================================
 
 local trackerBlacklistNames = {
@@ -1000,52 +887,33 @@ local function containsExcludedText(value)
 end
 
 local function modelContainsExcludedText(model)
-	if not model then
-		return true
-	end
-
-	if containsExcludedText(model.Name) then
-		return true
-	end
+	if not model then return true end
+	if containsExcludedText(model.Name) then return true end
 
 	for _, descendant in ipairs(model:GetDescendants()) do
-		if containsExcludedText(descendant.Name) then
-			return true
-		end
-
+		if containsExcludedText(descendant.Name) then return true end
 		if descendant:IsA("ProximityPrompt") then
-			if containsExcludedText(descendant.ActionText)
-				or containsExcludedText(descendant.ObjectText) then
+			if containsExcludedText(descendant.ActionText) or containsExcludedText(descendant.ObjectText) then
 				return true
 			end
 		end
 	end
-
 	return false
 end
 
 local function findPickupModelFromPrompt(prompt)
-	if not prompt or not prompt.Parent then
-		return nil
-	end
+	if not prompt or not prompt.Parent then return nil end
 
 	local current = prompt.Parent
 	local map = Workspace:FindFirstChild("Map")
 
 	while current and current ~= Workspace do
 		if current:IsA("Model") then
-			if map and current.Parent == map then
-				return current
-			end
-
-			if current.Parent and lowered(current.Parent.Name) == "spawneditems" then
-				return current
-			end
+			if map and current.Parent == map then return current end
+			if current.Parent and lowered(current.Parent.Name) == "spawneditems" then return current end
 		end
-
 		current = current.Parent
 	end
-
 	return nil
 end
 
@@ -1068,13 +936,8 @@ local function promptLooksLikePickup(prompt)
 	local parent = prompt.Parent
 	local gp = parent and parent.Parent and lowered(parent.Parent.Name) or ""
 
-	if trackerBlacklistNames[gp] then
-		return false
-	end
-
-	if gp == "map" or gp == "spawneditems" then
-		return true
-	end
+	if trackerBlacklistNames[gp] then return false end
+	if gp == "map" or gp == "spawneditems" then return true end
 
 	return findPickupModelFromPrompt(prompt) ~= nil
 end
@@ -1085,29 +948,19 @@ local function targetPartForModel(model, prompt)
 	end
 
 	local bottle = model:FindFirstChild("Bottle", true)
-	if bottle and bottle:IsA("BasePart") then
-		return bottle
-	end
+	if bottle and bottle:IsA("BasePart") then return bottle end
 
 	local windB = model:FindFirstChild("windb", true)
-	if windB and windB:IsA("BasePart") then
-		return windB
-	end
+	if windB and windB:IsA("BasePart") then return windB end
 
 	local windC = model:FindFirstChild("windc", true)
-	if windC and windC:IsA("BasePart") then
-		return windC
-	end
+	if windC and windC:IsA("BasePart") then return windC end
 
 	local hitox = model:FindFirstChild("Hitox", true)
-	if hitox and hitox:IsA("BasePart") then
-		return hitox
-	end
+	if hitox and hitox:IsA("BasePart") then return hitox end
 
 	local nullPart = model:FindFirstChild("Null", true) or model:FindFirstChild("NULL", true) or model:FindFirstChild("NULL?", true)
-	if nullPart and nullPart:IsA("BasePart") then
-		return nullPart
-	end
+	if nullPart and nullPart:IsA("BasePart") then return nullPart end
 
 	return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
 end
@@ -1116,8 +969,7 @@ local function detectedItemName(model, prompt)
 	local objectText = prompt and tostring(prompt.ObjectText or "") or ""
 	local actionText = prompt and tostring(prompt.ActionText or "") or ""
 
-	if objectText ~= "" and lowered(objectText) ~= "item" and lowered(objectText) ~= "object"
-		and not containsExcludedText(objectText) then
+	if objectText ~= "" and lowered(objectText) ~= "item" and lowered(objectText) ~= "object" and not containsExcludedText(objectText) then
 		local _, standardName = getMaterialBiome(objectText)
 		return standardName
 	end
@@ -1126,13 +978,10 @@ local function detectedItemName(model, prompt)
 	local lowerModelName = lowered(modelName)
 	if modelName ~= "" and lowerModelName ~= "model" and lowerModelName ~= "spawneditems" and lowerModelName ~= "workspace" and not containsExcludedText(modelName) then
 		local biome, standardName = getMaterialBiome(modelName)
-		if biome ~= "Special / Other" then
-			return standardName
-		end
+		if biome ~= "Special / Other" then return standardName end
 	end
 
-	if actionText ~= "" and lowered(actionText) ~= "pick up" and lowered(actionText) ~= "pickup"
-		and lowered(actionText) ~= "interact" and not containsExcludedText(actionText) then
+	if actionText ~= "" and lowered(actionText) ~= "pick up" and lowered(actionText) ~= "pickup" and lowered(actionText) ~= "interact" and not containsExcludedText(actionText) then
 		local _, standardName = getMaterialBiome(actionText)
 		return standardName
 	end
@@ -1154,12 +1003,9 @@ local function detectedItemName(model, prompt)
 		if descendant:IsA("BasePart") then
 			local n = tostring(descendant.Name)
 			local ln = lowered(n)
-
 			if n ~= "" and ln ~= "meshpart" and ln ~= "part" and ln ~= "hitox" and not containsExcludedText(n) then
 				local biome, standardName = getMaterialBiome(n)
-				if biome ~= "Special / Other" then
-					return standardName
-				end
+				if biome ~= "Special / Other" then return standardName end
 				return n
 			end
 		end
@@ -1173,17 +1019,13 @@ local function getAllPickupEntries()
 	local entries = {}
 	local seen = {}
 
-	if not root then
-		return entries
-	end
+	if not root then return entries end
 
 	for _, descendant in ipairs(Workspace:GetDescendants()) do
 		if descendant:IsA("ProximityPrompt") and promptLooksLikePickup(descendant) then
 			local model = findPickupModelFromPrompt(descendant)
-
 			if model and not seen[model] and not modelContainsExcludedText(model) then
 				local part = targetPartForModel(model, descendant)
-
 				if part then
 					seen[model] = true
 					table.insert(entries, {
@@ -1198,45 +1040,32 @@ local function getAllPickupEntries()
 		end
 	end
 
-	table.sort(entries, function(a, b)
-		return a.distance < b.distance
-	end)
-
+	table.sort(entries, function(a, b) return a.distance < b.distance end)
 	return entries
 end
 
 -- =========================================================
--- NAVIGATION AI
+-- ADVANCED NAVIGATION & SMART JUMP AI
 -- =========================================================
 
 local NAV_MAX_REPATHS = 8
-local NAV_WAYPOINT_TIMEOUT = 4.5
-local NAV_STUCK_TIME = 1.35
-local NAV_REACH_DISTANCE = 4.0
+local NAV_WAYPOINT_TIMEOUT = 3.5
+local NAV_STUCK_TIME = 1.0
+local NAV_REACH_DISTANCE = 3.8
 
 local function setNavigationStatus(line1, line2, line3)
-	local lines = {line1}
-
-	if line2 and line2 ~= "" then
-		table.insert(lines, line2)
-	end
-
-	if line3 and line3 ~= "" then
-		table.insert(lines, line3)
-	end
-
+	local lines = { line1 }
+	if line2 and line2 ~= "" then table.insert(lines, line2) end
+	if line3 and line3 ~= "" then table.insert(lines, line3) end
 	navigationStatus.Text = table.concat(lines, "\n")
 end
 
 local function navigationCharacter()
 	local character = player.Character
-	if not character then
-		return nil, nil, nil
-	end
+	if not character then return nil, nil, nil end
 
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local root = character:FindFirstChild("HumanoidRootPart")
-
 	if not humanoid or not root or humanoid.Health <= 0 then
 		return character, nil, nil
 	end
@@ -1244,14 +1073,35 @@ local function navigationCharacter()
 	return character, humanoid, root
 end
 
+-- Guaranteed jump execution via state change
+local function forceJump(humanoid)
+	if not humanoid or humanoid.Health <= 0 then return end
+	humanoid.Jump = true
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+end
+
+-- Raycast ahead to detect obstacles directly in front of character
+local function isObstacleAhead(root, targetPosition, character)
+	local origin = root.Position
+	local direction = (targetPosition - origin).Unit * 3.2
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	params.IgnoreWater = true
+
+	local result = Workspace:Raycast(origin, direction, params)
+	return result ~= nil
+end
+
 local function safeGroundAt(position, character)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = character and {character} or {}
+	params.FilterDescendantsInstances = character and { character } or {}
 	params.IgnoreWater = false
 
-	local origin = position + Vector3.new(0, 4, 0)
-	local direction = Vector3.new(0, -14, 0)
+	local origin = position + Vector3.new(0, 5, 0)
+	local direction = Vector3.new(0, -25, 0)
 
 	return Workspace:Raycast(origin, direction, params) ~= nil
 end
@@ -1265,14 +1115,13 @@ local function tryFirePrompt(prompt)
 		local ok, err = pcall(function()
 			fireproximityprompt(prompt, 0)
 		end)
-
 		return ok, ok and nil or tostring(err)
 	end
 
-	return false, "Executor has no fireproximityprompt; press E manually."
+	return false, "Executor missing fireproximityprompt; press E."
 end
 
-local function waitForWaypoint(token, humanoid, root, destination)
+local function waitForWaypoint(token, humanoid, root, destination, isJump)
 	local started = os.clock()
 	local lastMovementTime = os.clock()
 	local lastPosition = root.Position
@@ -1287,58 +1136,70 @@ local function waitForWaypoint(token, humanoid, root, destination)
 			return false, "character unavailable"
 		end
 
-		local distance = (root.Position - destination).Magnitude
+		local currentPos = root.Position
+		local distance = (currentPos - destination).Magnitude
+		local deltaY = destination.Y - currentPos.Y
+
+		-- Smart dynamic jump on elevation difference or obstacle
+		if isJump or deltaY > 1.2 or isObstacleAhead(root, destination, player.Character) then
+			forceJump(humanoid)
+		end
 
 		if distance <= NAV_REACH_DISTANCE then
 			return true
 		end
 
-		local moved = (root.Position - lastPosition).Magnitude
-
-		if moved >= 0.8 then
-			lastPosition = root.Position
+		local moved = (currentPos - lastPosition).Magnitude
+		if moved >= 0.7 then
+			lastPosition = currentPos
 			lastMovementTime = os.clock()
+			jumpAttempted = false
 		elseif os.clock() - lastMovementTime >= NAV_STUCK_TIME then
+			-- Unstuck routine
 			if not jumpAttempted then
-				humanoid.Jump = true
+				forceJump(humanoid)
 				jumpAttempted = true
 				lastMovementTime = os.clock()
 			else
+				-- Lateral unjam step
+				humanoid:Move(Vector3.new(math.random(-1, 1), 0, math.random(-1, 1)).Unit)
+				forceJump(humanoid)
 				return false, "stuck"
 			end
 		end
 
-		task.wait(0.08)
+		task.wait(0.05)
 	end
 
 	return false, "waypoint timeout"
 end
 
-local function directFinalApproach(token, entry, humanoid, root)
-	if not entry.part or not entry.part.Parent then
-		return false
+-- Fallback smart direct runner when PathfindingService fails on tricky terrain
+local function directApproachSmart(token, entry, humanoid, root)
+	if not entry.part or not entry.part.Parent then return false, "Target gone." end
+
+	local started = os.clock()
+	while os.clock() - started < 12 do
+		if token ~= navigationToken or not navigationRunning then return false, "cancelled" end
+		if not humanoid.Parent or humanoid.Health <= 0 or not root.Parent then return false, "dead" end
+
+		local targetPos = entry.part.Position
+		local dist = (root.Position - targetPos).Magnitude
+
+		if dist <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1) then
+			return true, "Reached target"
+		end
+
+		humanoid:MoveTo(targetPos)
+
+		if (targetPos.Y - root.Position.Y) > 1.2 or isObstacleAhead(root, targetPos, player.Character) then
+			forceJump(humanoid)
+		end
+
+		task.wait(0.08)
 	end
 
-	local distance = (root.Position - entry.part.Position).Magnitude
-
-	if distance > 11 then
-		return false
-	end
-
-	if not safeGroundAt(entry.part.Position, player.Character) then
-		return false
-	end
-
-	humanoid:MoveTo(entry.part.Position)
-
-	local ok = waitForWaypoint(
-		token,
-		humanoid,
-		root,
-		entry.part.Position
-	)
-
-	return ok
+	return false, "Direct walk timed out."
 end
 
 local function followComputedPath(token, entry, humanoid, root)
@@ -1347,31 +1208,28 @@ local function followComputedPath(token, entry, humanoid, root)
 	end
 
 	local path = PathfindingService:CreatePath({
-		AgentRadius = 2,
-		AgentHeight = 5,
+		AgentRadius = 2.0,
+		AgentHeight = 5.0,
 		AgentCanJump = true,
 		AgentCanClimb = true,
-		AgentJumpHeight = 7,
-		AgentMaxSlope = 45,
-		WaypointSpacing = 4,
+		AgentJumpHeight = 10.0,
+		AgentMaxSlope = 55.0,
+		WaypointSpacing = 3.5,
 	})
 
 	local ok, computeError = pcall(function()
 		path:ComputeAsync(root.Position, entry.part.Position)
 	end)
 
-	if not ok then
-		return false, "Path error: " .. tostring(computeError)
-	end
-
-	if path.Status ~= Enum.PathStatus.Success then
-		return false, "No safe path."
+	if not ok or path.Status ~= Enum.PathStatus.Success then
+		-- Fallback to Smart Direct Navigation
+		setNavigationStatus("AI: Pathfinding complex", "Using direct obstacle navigation...")
+		return directApproachSmart(token, entry, humanoid, root)
 	end
 
 	local waypoints = path:GetWaypoints()
-
 	if #waypoints < 2 then
-		return directFinalApproach(token, entry, humanoid, root), "Short path."
+		return directApproachSmart(token, entry, humanoid, root)
 	end
 
 	for index = 2, #waypoints do
@@ -1379,25 +1237,21 @@ local function followComputedPath(token, entry, humanoid, root)
 			return false, "cancelled"
 		end
 
-		if not entry.model or not entry.model.Parent
-			or not entry.part or not entry.part.Parent then
+		if not entry.model or not entry.model.Parent or not entry.part or not entry.part.Parent then
 			return false, "Target disappeared."
 		end
 
 		local waypoint = waypoints[index]
+		local isJumpAction = (waypoint.Action == Enum.PathWaypointAction.Jump)
 
-		if not safeGroundAt(waypoint.Position, player.Character) then
-			return false, "Unsafe waypoint; recalculating."
+		-- Only check ground safety if NOT mid-air jump
+		if not isJumpAction and not safeGroundAt(waypoint.Position, player.Character) then
+			return false, "Recalculating over void"
 		end
 
 		local currentDistance = (root.Position - entry.part.Position).Magnitude
-
-		if currentDistance <= math.max(5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 0.5) then
+		if currentDistance <= math.max(4.5, (entry.prompt and entry.prompt.MaxActivationDistance or 8) - 1.0) then
 			return true, "Reached pickup range."
-		end
-
-		if waypoint.Action == Enum.PathWaypointAction.Jump then
-			humanoid.Jump = true
 		end
 
 		setNavigationStatus(
@@ -1412,7 +1266,8 @@ local function followComputedPath(token, entry, humanoid, root)
 			token,
 			humanoid,
 			root,
-			waypoint.Position
+			waypoint.Position,
+			isJumpAction
 		)
 
 		if not reached then
@@ -1430,20 +1285,15 @@ stopNavigation = function(reason)
 	navigationTargetName = nil
 
 	local _, humanoid, root = navigationCharacter()
-
 	if humanoid and root then
 		humanoid:MoveTo(root.Position)
 	end
 
-	setNavigationStatus(
-		"AI: idle",
-		reason or "Navigation stopped."
-	)
+	setNavigationStatus("AI: idle", reason or "Navigation stopped.")
 end
 
 startNavigation = function(entry)
-	if not entry or not entry.model or not entry.model.Parent
-		or not entry.part or not entry.part.Parent then
+	if not entry or not entry.model or not entry.model.Parent or not entry.part or not entry.part.Parent then
 		setNavigationStatus("AI: error", "Selected material no longer exists.")
 		return
 	end
@@ -1455,126 +1305,82 @@ startNavigation = function(entry)
 	navigationTargetModel = entry.model
 	navigationTargetName = entry.name
 
-	setNavigationStatus(
-		"AI: preparing route",
-		entry.name,
-		tostring(math.floor(entry.distance + 0.5)) .. " studs away"
-	)
+	setNavigationStatus("AI: route initiated", entry.name, tostring(math.floor(entry.distance + 0.5)) .. " studs away")
 
 	pcall(function()
 		StarterGui:SetCore("SendNotification", {
 			Title = "Navigation AI",
-			Text = "Going to " .. entry.name,
+			Text = "Navigating to " .. entry.name,
 			Duration = 3
 		})
 	end)
 
 	task.spawn(function()
 		for attempt = 1, NAV_MAX_REPATHS do
-			if token ~= navigationToken or not navigationRunning then
-				return
-			end
+			if token ~= navigationToken or not navigationRunning then return end
 
 			if not entry.model.Parent or not entry.part.Parent then
-				stopNavigation("Material disappeared before arrival.")
+				stopNavigation("Material was collected or disappeared.")
 				return
 			end
 
-			local character, humanoid, root = navigationCharacter()
-
+			local _, humanoid, root = navigationCharacter()
 			if not humanoid or not root then
 				stopNavigation("Character is unavailable.")
 				return
 			end
 
 			local targetDistance = (root.Position - entry.part.Position).Magnitude
-			local activationDistance =
-				entry.prompt and math.max(4, entry.prompt.MaxActivationDistance) or 8
+			local activationDistance = entry.prompt and math.max(4.5, entry.prompt.MaxActivationDistance) or 8
 
 			if targetDistance <= activationDistance then
-				setNavigationStatus(
-					"AI: reached " .. entry.name,
-					"Picking up material..."
-				)
-
+				setNavigationStatus("AI: arrived at " .. entry.name, "Collecting material...")
 				local fired, fireError = tryFirePrompt(entry.prompt)
 
 				if fired then
-					task.wait(0.45)
-
+					task.wait(0.35)
 					if not entry.model.Parent then
 						navigationRunning = false
-						setNavigationStatus(
-							"AI: complete",
-							entry.name .. " picked up."
-						)
+						setNavigationStatus("AI: complete", entry.name .. " collected successfully!")
 						return
 					end
-
-					task.wait(0.65)
-
+					task.wait(0.5)
 					if not entry.model.Parent then
 						navigationRunning = false
-						setNavigationStatus(
-							"AI: complete",
-							entry.name .. " picked up."
-						)
+						setNavigationStatus("AI: complete", entry.name .. " collected successfully!")
 						return
 					end
-
-					setNavigationStatus(
-						"AI: pickup sent",
-						"Waiting / recalculating if needed..."
-					)
 				else
 					navigationRunning = false
-					setNavigationStatus(
-						"AI: arrived",
-						fireError or "Press E to pick up."
-					)
+					setNavigationStatus("AI: arrived", fireError or "Press E to collect.")
 					return
 				end
 			end
 
-			setNavigationStatus(
-				"AI: calculating safe route",
-				entry.name,
-				"Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS)
-			)
+			setNavigationStatus("AI: pathfinding", entry.name, "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
 
-			local reached, reason = followComputedPath(
-				token,
-				entry,
-				humanoid,
-				root
-			)
+			local reached, reason = followComputedPath(token, entry, humanoid, root)
 
-			if token ~= navigationToken or not navigationRunning then
-				return
-			end
+			if token ~= navigationToken or not navigationRunning then return end
 
 			if reached then
-				task.wait(0.12)
+				task.wait(0.1)
 			else
-				setNavigationStatus(
-					"AI: recalculating",
-					reason or "Path failed.",
-					"Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS)
-				)
-
-				task.wait(0.22)
+				setNavigationStatus("AI: recalculating", reason or "Path rerouted.", "Attempt " .. tostring(attempt) .. "/" .. tostring(NAV_MAX_REPATHS))
+				task.wait(0.2)
 			end
 		end
 
 		if token == navigationToken and navigationRunning then
 			navigationRunning = false
-			setNavigationStatus(
-				"AI: failed",
-				"Could not find a safe route after several attempts."
-			)
+			setNavigationStatus("AI: stopped", "Could not safely reach target.")
 		end
 	end)
 end
+
+-- =========================================================
+-- VISUAL BEAMS & HIGHLIGHTS
+-- =========================================================
 
 local function destroyTrackerVisual(model)
 	local visual = trackerVisuals[model]
@@ -1585,19 +1391,13 @@ local function destroyTrackerVisual(model)
 			pcall(function() object:Destroy() end)
 		end
 	end
-
 	trackerVisuals[model] = nil
 end
 
 local function clearTrackerVisuals()
 	local models = {}
-	for model in pairs(trackerVisuals) do
-		table.insert(models, model)
-	end
-
-	for _, model in ipairs(models) do
-		destroyTrackerVisual(model)
-	end
+	for model in pairs(trackerVisuals) do table.insert(models, model) end
+	for _, model in ipairs(models) do destroyTrackerVisual(model) end
 end
 
 local function createTrackerVisual(model, targetPart)
@@ -1663,10 +1463,7 @@ local function createTrackerVisual(model, targetPart)
 	card.BackgroundTransparency = 0.18
 	card.BorderSizePixel = 0
 	card.Parent = billboard
-
-	local cardCorner = Instance.new("UICorner")
-	cardCorner.CornerRadius = UDim.new(0, 7)
-	cardCorner.Parent = card
+	uiCorner(card, 7)
 
 	local cardStroke = Instance.new("UIStroke")
 	cardStroke.Color = Color3.fromRGB(220, 224, 232)
@@ -1719,7 +1516,6 @@ local function updateTracker()
 
 	for _, entry in ipairs(entries) do
 		active[entry.model] = true
-
 		local visual = trackerVisuals[entry.model]
 		if not visual or not visual.beam or not visual.beam.Parent or visual.targetPart ~= entry.part then
 			createTrackerVisual(entry.model, entry.part)
@@ -1727,9 +1523,7 @@ local function updateTracker()
 		end
 
 		if visual then
-			if visual.nameLabel then
-				visual.nameLabel.Text = entry.name
-			end
+			if visual.nameLabel then visual.nameLabel.Text = entry.name end
 			if visual.distanceLabel then
 				visual.distanceLabel.Text = tostring(math.floor(entry.distance + 0.5)) .. " studs"
 			end
@@ -1738,14 +1532,9 @@ local function updateTracker()
 
 	local stale = {}
 	for model in pairs(trackerVisuals) do
-		if not active[model] or not model.Parent then
-			table.insert(stale, model)
-		end
+		if not active[model] or not model.Parent then table.insert(stale, model) end
 	end
-
-	for _, model in ipairs(stale) do
-		destroyTrackerVisual(model)
-	end
+	for _, model in ipairs(stale) do destroyTrackerVisual(model) end
 
 	if #entries == 0 then
 		trackerStatus.Text = "No pickup prompts found. Waiting for materials..."
@@ -1763,9 +1552,7 @@ local function startTracker()
 	trackButton.BackgroundColor3 = Color3.fromRGB(92, 68, 18)
 	trackerStatus.Text = "Scanning pickup prompts..."
 
-	if trackerConnection then
-		trackerConnection:Disconnect()
-	end
+	if trackerConnection then trackerConnection:Disconnect() end
 
 	local elapsed = 0
 	trackerConnection = RunService.Heartbeat:Connect(function(dt)
@@ -1775,7 +1562,6 @@ local function startTracker()
 			updateTracker()
 		end
 	end)
-
 	updateTracker()
 end
 
@@ -1799,140 +1585,80 @@ trackButton.MouseButton1Click:Connect(function()
 end)
 
 -- =========================================================
--- DIAGNOSTIC HELPERS
+-- DIAGNOSTIC SYSTEM
 -- =========================================================
 
 local function containsKeyword(text)
 	local low = string.lower(text)
-
 	for _, keyword in ipairs(KEYWORDS) do
-		if string.find(low, keyword, 1, true) then
-			return true
-		end
+		if string.find(low, keyword, 1, true) then return true end
 	end
-
 	return false
 end
 
 local function getCharacterRoot()
 	local character = player.Character
-	if not character then
-		return nil
-	end
-
-	return character:FindFirstChild("HumanoidRootPart")
+	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
 local function getObjectPosition(instance)
-	if instance:IsA("BasePart") then
-		return instance.Position
-	end
-
+	if instance:IsA("BasePart") then return instance.Position end
 	if instance:IsA("Model") then
-		local ok, pivot = pcall(function()
-			return instance:GetPivot()
-		end)
-
-		if ok then
-			return pivot.Position
-		end
+		local ok, pivot = pcall(function() return instance:GetPivot() end)
+		if ok then return pivot.Position end
 	end
-
 	local parent = instance.Parent
-
 	if parent then
-		if parent:IsA("BasePart") then
-			return parent.Position
-		end
-
+		if parent:IsA("BasePart") then return parent.Position end
 		if parent:IsA("Model") then
-			local ok, pivot = pcall(function()
-				return parent:GetPivot()
-			end)
-
-			if ok then
-				return pivot.Position
-			end
+			local ok, pivot = pcall(function() return parent:GetPivot() end)
+			if ok then return pivot.Position end
 		end
 	end
-
 	return nil
 end
 
 local function getDistance(instance)
 	local root = getCharacterRoot()
 	local position = getObjectPosition(instance)
-
-	if not root or not position then
-		return nil
-	end
-
+	if not root or not position then return nil end
 	return (root.Position - position).Magnitude
 end
 
 local function getPositionText(instance)
 	local position = getObjectPosition(instance)
-
-	if not position then
-		return "?"
-	end
-
-	return string.format(
-		"%.1f, %.1f, %.1f",
-		position.X,
-		position.Y,
-		position.Z
-	)
+	if not position then return "?" end
+	return string.format("%.1f, %.1f, %.1f", position.X, position.Y, position.Z)
 end
 
 local function getPath(instance)
 	local parts = {}
 	local current = instance
-
 	while current and current ~= game do
 		table.insert(parts, 1, current.Name)
 		current = current.Parent
 	end
-
 	return table.concat(parts, ".")
 end
 
 local function isInteresting(instance)
-	if instance:IsA("ProximityPrompt") then
-		return true, "ProximityPrompt"
-	end
-
-	if instance:IsA("ClickDetector") then
-		return true, "ClickDetector"
-	end
-
-	if instance:IsA("TouchTransmitter") then
-		return true, "TouchTransmitter"
-	end
-
-	if (
-		instance:IsA("Model")
-		or instance:IsA("BasePart")
-		or instance:IsA("Tool")
-		or instance:IsA("Folder")
-	) and containsKeyword(instance.Name) then
+	if instance:IsA("ProximityPrompt") then return true, "ProximityPrompt" end
+	if instance:IsA("ClickDetector") then return true, "ClickDetector" end
+	if instance:IsA("TouchTransmitter") then return true, "TouchTransmitter" end
+	if (instance:IsA("Model") or instance:IsA("BasePart") or instance:IsA("Tool") or instance:IsA("Folder")) and containsKeyword(instance.Name) then
 		return true, "Name keyword"
 	end
-
 	return false, nil
 end
 
 local function clearRows()
 	for _, child in ipairs(resultsFrame:GetChildren()) do
-		if child:IsA("TextLabel") then
-			child:Destroy()
-		end
+		if child:IsA("TextLabel") then child:Destroy() end
 	end
 end
 
 local function addVisualRow(index, entry)
 	local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
-
 	local row = Instance.new("TextLabel")
 	row.Name = "Result_" .. index
 	row.Size = UDim2.new(1, -4, 0, 92)
@@ -1944,45 +1670,21 @@ local function addVisualRow(index, entry)
 	row.TextWrapped = true
 	row.TextXAlignment = Enum.TextXAlignment.Left
 	row.TextYAlignment = Enum.TextYAlignment.Top
-	row.Text =
-		"[" .. index .. "] [" .. entry.source .. "] " ..
-		entry.name .. " <" .. entry.className .. ">" ..
-		"\nReason: " .. entry.reason ..
-		" | Distance: " .. distanceText ..
-		" | Pos: " .. entry.position ..
-		"\nParent: " .. entry.parent ..
-		"\nPath: " .. entry.path
+	row.Text = "[" .. index .. "] [" .. entry.source .. "] " .. entry.name .. " <" .. entry.className .. ">" ..
+		"\nReason: " .. entry.reason .. " | Distance: " .. distanceText .. " | Pos: " .. entry.position ..
+		"\nParent: " .. entry.parent .. "\nPath: " .. entry.path
 	row.Parent = resultsFrame
-
-	local rowCorner = Instance.new("UICorner")
-	rowCorner.CornerRadius = UDim.new(0, 5)
-	rowCorner.Parent = row
-end
-
-local function rebuildRows()
-	clearRows()
-
-	for index, entry in ipairs(diagnosticEntries) do
-		addVisualRow(index, entry)
-	end
+	uiCorner(row, 5)
 end
 
 local function addEntry(instance, reason, source)
-	if not instance or not instance.Parent then
-		return
-	end
-
+	if not instance or not instance.Parent then return end
 	local path = getPath(instance)
 	local uniqueKey = source .. "|" .. path
-
-	if diagnosticSeen[uniqueKey] then
-		return
-	end
+	if diagnosticSeen[uniqueKey] then return end
 
 	diagnosticSeen[uniqueKey] = true
-
 	local parentName = instance.Parent and instance.Parent:GetFullName() or "?"
-
 	local entry = {
 		source = source,
 		name = instance.Name,
@@ -1996,22 +1698,6 @@ local function addEntry(instance, reason, source)
 
 	table.insert(diagnosticEntries, entry)
 	addVisualRow(#diagnosticEntries, entry)
-
-	local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
-
-	print(
-		string.format(
-			"[SOLS DIAG] source=%s | name=%s | class=%s | reason=%s | distance=%s | position=%s | parent=%s | path=%s",
-			entry.source,
-			entry.name,
-			entry.className,
-			entry.reason,
-			distanceText,
-			entry.position,
-			entry.parent,
-			entry.path
-		)
-	)
 end
 
 local function buildExportText()
@@ -2020,152 +1706,65 @@ local function buildExportText()
 		"Entries: " .. tostring(#diagnosticEntries),
 		""
 	}
-
 	for index, entry in ipairs(diagnosticEntries) do
 		local distanceText = entry.distance and string.format("%.1f", entry.distance) or "?"
-
-		table.insert(
-			lines,
-			string.format(
-				"[%d]\nSource: %s\nName: %s\nClass: %s\nReason: %s\nDistance: %s\nPosition: %s\nParent: %s\nPath: %s\n",
-				index,
-				entry.source,
-				entry.name,
-				entry.className,
-				entry.reason,
-				distanceText,
-				entry.position,
-				entry.parent,
-				entry.path
-			)
-		)
+		table.insert(lines, string.format(
+			"[%d]\nSource: %s\nName: %s\nClass: %s\nReason: %s\nDistance: %s\nPosition: %s\nParent: %s\nPath: %s\n",
+			index, entry.source, entry.name, entry.className, entry.reason, distanceText, entry.position, entry.parent, entry.path
+		))
 	end
-
 	return table.concat(lines, "\n")
 end
 
--- =========================================================
--- MANUAL SCAN
--- =========================================================
-
-local function runManualScan()
+scanButton.MouseButton1Click:Connect(function()
 	diagnosticStatus.Text = "Scanning Workspace..."
-
 	local beforeCount = #diagnosticEntries
-
 	for _, instance in ipairs(Workspace:GetDescendants()) do
 		local interesting, reason = isInteresting(instance)
-
-		if interesting then
-			addEntry(instance, reason, "SCAN")
-		end
+		if interesting then addEntry(instance, reason, "SCAN") end
 	end
-
-	local added = #diagnosticEntries - beforeCount
-	diagnosticStatus.Text =
-		"Manual scan complete. Added " ..
-		added ..
-		" | Total entries: " ..
-		#diagnosticEntries
-end
-
-scanButton.MouseButton1Click:Connect(runManualScan)
-
--- =========================================================
--- LIVE MONITOR
--- =========================================================
-
-local function stopLiveMonitor()
-	liveMonitorEnabled = false
-	liveButton.Text = "LIVE: OFF"
-	liveButton.BackgroundColor3 = Color3.fromRGB(48, 48, 48)
-
-	if descendantConnection then
-		descendantConnection:Disconnect()
-		descendantConnection = nil
-	end
-
-	diagnosticStatus.Text = "Live monitor stopped. Total entries: " .. #diagnosticEntries
-end
-
-local function startLiveMonitor()
-	liveMonitorEnabled = true
-	liveButton.Text = "LIVE: ON"
-	liveButton.BackgroundColor3 = Color3.fromRGB(42, 78, 48)
-
-	if descendantConnection then
-		descendantConnection:Disconnect()
-	end
-
-	descendantConnection = Workspace.DescendantAdded:Connect(function(instance)
-		if not liveMonitorEnabled then
-			return
-		end
-
-		task.delay(0.15, function()
-			if not liveMonitorEnabled or not instance or not instance.Parent then
-				return
-			end
-
-			local interesting, reason = isInteresting(instance)
-
-			if interesting then
-				addEntry(instance, reason, "LIVE")
-				diagnosticStatus.Text =
-					"Live object captured: " ..
-					instance.Name ..
-					" | Total: " ..
-					#diagnosticEntries
-			end
-		end)
-	end)
-
-	diagnosticStatus.Text =
-		"Live monitor active. Waiting for newly spawned objects..."
-end
+	diagnosticStatus.Text = "Manual scan complete. Added " .. (#diagnosticEntries - beforeCount) .. " | Total: " .. #diagnosticEntries
+end)
 
 liveButton.MouseButton1Click:Connect(function()
+	liveMonitorEnabled = not liveMonitorEnabled
 	if liveMonitorEnabled then
-		stopLiveMonitor()
+		liveButton.Text = "LIVE: ON"
+		liveButton.BackgroundColor3 = Color3.fromRGB(42, 78, 48)
+		if descendantConnection then descendantConnection:Disconnect() end
+		descendantConnection = Workspace.DescendantAdded:Connect(function(instance)
+			if not liveMonitorEnabled then return end
+			task.delay(0.15, function()
+				if not liveMonitorEnabled or not instance or not instance.Parent then return end
+				local interesting, reason = isInteresting(instance)
+				if interesting then
+					addEntry(instance, reason, "LIVE")
+					diagnosticStatus.Text = "Captured: " .. instance.Name .. " | Total: " .. #diagnosticEntries
+				end
+			end)
+		end)
+		diagnosticStatus.Text = "Live monitor active."
 	else
-		startLiveMonitor()
+		liveButton.Text = "LIVE: OFF"
+		liveButton.BackgroundColor3 = Color3.fromRGB(48, 48, 48)
+		if descendantConnection then
+			descendantConnection:Disconnect()
+			descendantConnection = nil
+		end
+		diagnosticStatus.Text = "Live monitor stopped."
 	end
 end)
 
--- =========================================================
--- COPY / CLEAR
--- =========================================================
-
 copyButton.MouseButton1Click:Connect(function()
 	local exportText = buildExportText()
-
 	if #diagnosticEntries == 0 then
 		diagnosticStatus.Text = "Nothing to copy yet."
 		return
 	end
-
-	local clipboardFunction =
-		setclipboard
-		or toclipboard
-		or (syn and syn.write_clipboard)
-
-	if clipboardFunction then
-		local ok, err = pcall(function()
-			clipboardFunction(exportText)
-		end)
-
-		if ok then
-			diagnosticStatus.Text =
-				"Copied " ..
-				#diagnosticEntries ..
-				" entries. Paste them into ChatGPT."
-		else
-			diagnosticStatus.Text = "Clipboard failed: " .. tostring(err)
-			print(exportText)
-		end
+	if copyToClipboard(exportText) then
+		diagnosticStatus.Text = "Copied " .. #diagnosticEntries .. " entries to clipboard."
 	else
-		diagnosticStatus.Text =
-			"Clipboard function unavailable. Export printed to console."
+		diagnosticStatus.Text = "Clipboard failed. Check console."
 		print(exportText)
 	end
 end)
@@ -2178,15 +1777,15 @@ clearButton.MouseButton1Click:Connect(function()
 end)
 
 -- =========================================================
--- READY
+-- INITIALIZATION
 -- =========================================================
 
-print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD)
+print("[Sols RNG Scanner] " .. VERSION .. " " .. BUILD .. " Loaded.")
 
 pcall(function()
 	StarterGui:SetCore("SendNotification", {
 		Title = "Sols Scanner " .. VERSION,
-		Text = BUILD .. " loaded — Null item fixed + Navigation AI",
-		Duration = 5
+		Text = "Navigation AI + Smart Jump Active",
+		Duration = 4
 	})
 end)
